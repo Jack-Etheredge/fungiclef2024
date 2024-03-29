@@ -24,7 +24,7 @@ CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
 # construct the argument parser
 parser = argparse.ArgumentParser()
 parser.add_argument(
-    '-e', '--epochs', type=int, default=20,
+    '-e', '--epochs', type=int, default=25,
     help='Number of epochs to train our network for'
 )
 parser.add_argument(
@@ -33,7 +33,7 @@ parser.add_argument(
 )
 parser.add_argument(
     '-lr', '--learning-rate', type=float,
-    dest='learning_rate', default=1e-3,
+    dest='learning_rate', default=3e-4,
     help='Learning rate for training the model'
 )
 args = vars(parser.parse_args())
@@ -116,7 +116,7 @@ if __name__ == '__main__':
     num_dataloader_workers = 8
     image_resize = 300
     validation_frac = 0.1
-    fine_tune_after_n_epochs = 2
+    fine_tune_after_n_epochs = 5
     model_file_path = str(
         CHECKPOINT_DIR /
         f"best_model_{loss_function}_batch_{32}_lr_{lr: .3f}_unfreeze_epoch_{fine_tune_after_n_epochs}.pth")
@@ -162,19 +162,7 @@ if __name__ == '__main__':
     if loss_function == "seesaw":
         criterion = SeesawLoss(num_classes=n_classes, device=device)
     elif loss_function == "focal":
-        # Withoout class weights
         criterion = FocalLoss(gamma=0.7)
-
-        # with weights
-        # The weights parameter is similar to the alpha value mentioned in the paper
-        weights = torch.FloatTensor([2, 3.2, 0.7])
-        criterion = FocalLoss(gamma=0.7, weights=weights)
-
-        # to ignore index
-        criterion = FocalLoss(gamma=0.7, ignore_index=0)
-
-        # To make it behaves as CrossEntropy loss
-        criterion = FocalLoss(gamma=0)
     elif loss_function == "crossentropy":
         criterion = nn.CrossEntropyLoss()
     else:
@@ -192,6 +180,7 @@ if __name__ == '__main__':
         if not unfrozen and epoch + 1 >= fine_tune_after_n_epochs:
             model = unfreeze_model(model)
             print("all layers unfrozen")
+            unfrozen = True
 
         print(f"[INFO]: Epoch {epoch + 1} of {epochs}")
         train_epoch_loss, train_epoch_acc = train(model, train_loader,
