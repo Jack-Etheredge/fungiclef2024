@@ -24,7 +24,7 @@ def save_model(epochs, model, optimizer, criterion, pretrained):
     }, str(OUTPUT_DIR / f"model_pretrained_{pretrained}.pth"))
 
 
-def checkpoint(epochs, model, optimizer, criterion, validation_loss, file_path):
+def checkpoint_model(epochs, model, optimizer, criterion, validation_loss, file_path):
     """
     Function to save the trained model to disk.
     """

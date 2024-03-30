@@ -13,6 +13,7 @@ from PIL import Image
 from sklearn.model_selection import train_test_split
 from torchvision import transforms
 from torch.utils.data import DataLoader, Dataset, Subset
+from torchvision.transforms import InterpolationMode
 
 Image.MAX_IMAGE_PIXELS = None
 
@@ -24,10 +25,12 @@ def get_train_transform(image_size, pretrained):
     : param image_size: Image size of resize when applying transforms.
     """
     train_transform = transforms.Compose([
-        transforms.Resize((image_size, image_size)),
+        transforms.Resize(256, interpolation=InterpolationMode.BICUBIC, antialias=True),
+        transforms.CenterCrop(224),
         transforms.RandomHorizontalFlip(p=0.5),
-        transforms.GaussianBlur(kernel_size=(5, 9), sigma=(0.1, 5)),
-        transforms.RandomAdjustSharpness(sharpness_factor=2, p=0.5),
+        # transforms.RandomApply([transforms.GaussianBlur(kernel_size=(5, 9), sigma=(0.1, 5))], p=0.5),
+        # transforms.RandomAdjustSharpness(sharpness_factor=2, p=0.5),
+        # transforms.RandomAutocontrast(),
         transforms.ToTensor(),
         normalize_transform(pretrained)
     ])
@@ -40,7 +43,8 @@ def get_valid_transform(image_size, pretrained):
     validation transformations
     """
     valid_transform = transforms.Compose([
-        transforms.Resize((image_size, image_size)),
+        transforms.Resize(256, interpolation=InterpolationMode.BICUBIC, antialias=True),
+        transforms.CenterCrop(224),
         transforms.ToTensor(),
         normalize_transform(pretrained)
     ])
@@ -89,7 +93,7 @@ def normalize_transform(pretrained):
 #     return dataset_train, dataset_valid, dataset.classes
 
 
-def get_datasets(pretrained, image_size, validation_frac):
+def get_datasets(pretrained, image_size, validation_frac, seed=42):
     """
     Function to prepare the Datasets.
     :param pretrained: Boolean, True or False.
@@ -105,7 +109,7 @@ def get_datasets(pretrained, image_size, validation_frac):
     )
     targets = dataset.target
     train_indices, test_indices = train_test_split(np.arange(targets.shape[0]), stratify=targets,
-                                                   test_size=validation_frac)
+                                                   test_size=validation_frac, seed=seed)
     train_dataset = Subset(dataset, indices=train_indices)
     val_dataset = Subset(dataset, indices=test_indices)
     return train_dataset, val_dataset, dataset.classes

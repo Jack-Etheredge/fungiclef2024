@@ -15,7 +15,7 @@ from tqdm.auto import tqdm
 
 from model import build_model, unfreeze_model
 from datasets import get_datasets, get_data_loaders
-from utils import save_model, save_plots, checkpoint
+from utils import save_model, save_plots, checkpoint_model
 from losses import SeesawLoss
 
 CHECKPOINT_DIR = Path('__file__').parent.absolute() / "model_checkpoints"
@@ -45,6 +45,7 @@ def train(model, trainloader, optimizer, criterion, loss_function_id):
     print('Training')
     train_running_loss = 0.0
     train_running_correct = 0
+    m = nn.Softmax(dim=-1)
     for i, data in tqdm(enumerate(trainloader), total=len(trainloader)):
         image, labels = data
         image = image.to(device)
@@ -54,7 +55,6 @@ def train(model, trainloader, optimizer, criterion, loss_function_id):
         outputs = model(image)
         # Calculate the loss.
         if loss_function_id == "focal":
-            m = torch.nn.Softmax(dim=-1)
             loss = criterion(m(outputs), labels)
         else:
             loss = criterion(outputs, labels)
@@ -64,6 +64,8 @@ def train(model, trainloader, optimizer, criterion, loss_function_id):
         train_running_correct += (preds == labels).sum().item()
         # Backpropagation
         loss.backward()
+        # gradient norm clipping
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)  # this is a tunable hparam
         # Update the weights.
         optimizer.step()
 
@@ -80,6 +82,7 @@ def validate(model, testloader, criterion, loss_function_id):
     valid_running_loss = 0.0
     valid_running_correct = 0
     with torch.no_grad():
+        m = nn.Softmax(dim=-1)
         for i, data in tqdm(enumerate(testloader), total=len(testloader)):
             image, labels = data
             image = image.to(device)
@@ -88,7 +91,6 @@ def validate(model, testloader, criterion, loss_function_id):
             outputs = model(image)
             # Calculate the loss.
             if loss_function_id == "focal":
-                m = torch.nn.Softmax(dim=-1)
                 loss = criterion(m(outputs), labels)
             else:
                 loss = criterion(outputs, labels)
@@ -114,9 +116,9 @@ if __name__ == '__main__':
     loss_function = "focal"
     batch_size = 32
     num_dataloader_workers = 8
-    image_resize = 300
+    image_resize = 224
     validation_frac = 0.1
-    fine_tune_after_n_epochs = 5
+    fine_tune_after_n_epochs = 4
     model_file_path = str(
         CHECKPOINT_DIR /
         f"best_model_{loss_function}_batch_{32}_lr_{lr: .3f}_unfreeze_epoch_{fine_tune_after_n_epochs}.pth")
@@ -177,7 +179,7 @@ if __name__ == '__main__':
     unfrozen = fine_tune_after_n_epochs == 0
     for epoch in range(epochs):
 
-        if not unfrozen and epoch + 1 >= fine_tune_after_n_epochs:
+        if not unfrozen and epoch + 1 > fine_tune_after_n_epochs:
             model = unfreeze_model(model)
             print("all layers unfrozen")
             unfrozen = True
@@ -199,7 +201,7 @@ if __name__ == '__main__':
             best_validation_loss = valid_epoch_loss
             best_epoch = epoch
             print("updating best model")
-            checkpoint(epoch + 1, model, optimizer, criterion, valid_epoch_loss, model_file_path)
+            checkpoint_model(epoch + 1, model, optimizer, criterion, valid_epoch_loss, model_file_path)
             print("successfully updated best model")
         elif epoch - best_epoch > early_stop_thresh:
             print("Early stopped training at epoch %d" % epoch)
