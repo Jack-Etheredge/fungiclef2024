@@ -109,7 +109,7 @@ def get_datasets(pretrained, image_size, validation_frac, seed=42):
     )
     targets = dataset.target
     train_indices, test_indices = train_test_split(np.arange(targets.shape[0]), stratify=targets,
-                                                   test_size=validation_frac, seed=seed)
+                                                   test_size=validation_frac, random_state=seed)
     train_dataset = Subset(dataset, indices=train_indices)
     val_dataset = Subset(dataset, indices=test_indices)
     return train_dataset, val_dataset, dataset.classes
