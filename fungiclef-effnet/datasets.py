@@ -1,5 +1,8 @@
 """
 modified from https://debuggercafe.com/transfer-learning-using-efficientnet-pytorch/
+
+switch to v2 of transforms
+https://pytorch.org/vision/stable/transforms.html#v1-or-v2-which-one-should-i-use
 """
 
 import os
@@ -11,9 +14,9 @@ import pandas as pd
 # from torchvision import datasets
 from PIL import Image
 from sklearn.model_selection import train_test_split
-from torchvision import transforms
+from torchvision.transforms import v2
 from torch.utils.data import DataLoader, Dataset, Subset
-from torchvision.transforms import InterpolationMode
+from torchvision.transforms.v2 import InterpolationMode
 
 Image.MAX_IMAGE_PIXELS = None
 
@@ -24,14 +27,15 @@ def get_train_transform(image_size, pretrained):
     training transformations
     : param image_size: Image size of resize when applying transforms.
     """
-    train_transform = transforms.Compose([
-        transforms.Resize(256, interpolation=InterpolationMode.BICUBIC, antialias=True),
-        transforms.CenterCrop(224),
-        transforms.RandomHorizontalFlip(p=0.5),
-        # transforms.RandomApply([transforms.GaussianBlur(kernel_size=(5, 9), sigma=(0.1, 5))], p=0.5),
-        # transforms.RandomAdjustSharpness(sharpness_factor=2, p=0.5),
-        # transforms.RandomAutocontrast(),
-        transforms.ToTensor(),
+    train_transform = v2.Compose([
+        v2.Resize(256, interpolation=InterpolationMode.BICUBIC, antialias=True),
+        v2.CenterCrop(224),
+        v2.TrivialAugmentWide(interpolation=InterpolationMode.BICUBIC),
+        # v2.RandomHorizontalFlip(p=0.5),
+        # v2.RandomApply([v2.GaussianBlur(kernel_size=(5, 9), sigma=(0.1, 5))], p=0.5),
+        # v2.RandomAdjustSharpness(sharpness_factor=2, p=0.5),
+        # v2.RandomAutocontrast(),
+        v2.ToTensor(),
         normalize_transform(pretrained)
     ])
     return train_transform
@@ -42,10 +46,10 @@ def get_valid_transform(image_size, pretrained):
     """
     validation transformations
     """
-    valid_transform = transforms.Compose([
-        transforms.Resize(256, interpolation=InterpolationMode.BICUBIC, antialias=True),
-        transforms.CenterCrop(224),
-        transforms.ToTensor(),
+    valid_transform = v2.Compose([
+        v2.Resize(256, interpolation=InterpolationMode.BICUBIC, antialias=True),
+        v2.CenterCrop(224),
+        v2.ToTensor(),
         normalize_transform(pretrained)
     ])
     return valid_transform
@@ -54,12 +58,12 @@ def get_valid_transform(image_size, pretrained):
 # Image normalization transforms.
 def normalize_transform(pretrained):
     if pretrained:  # Normalization for pre-trained weights.
-        normalize = transforms.Normalize(
+        normalize = v2.Normalize(
             mean=[0.485, 0.456, 0.406],
             std=[0.229, 0.224, 0.225]
         )
     else:  # Normalization when training from scratch.
-        normalize = transforms.Normalize(
+        normalize = v2.Normalize(
             mean=[0.5, 0.5, 0.5],
             std=[0.5, 0.5, 0.5]
         )

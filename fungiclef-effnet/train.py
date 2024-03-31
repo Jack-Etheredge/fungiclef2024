@@ -33,14 +33,14 @@ parser.add_argument(
 )
 parser.add_argument(
     '-lr', '--learning-rate', type=float,
-    dest='learning_rate', default=3e-4,
+    dest='learning_rate', default=1e-4,
     help='Learning rate for training the model'
 )
 args = vars(parser.parse_args())
 
 
 # Training function.
-def train(model, trainloader, optimizer, criterion, loss_function_id):
+def train(model, trainloader, optimizer, criterion, loss_function_id, max_norm):
     model.train()
     print('Training')
     train_running_loss = 0.0
@@ -65,7 +65,7 @@ def train(model, trainloader, optimizer, criterion, loss_function_id):
         # Backpropagation
         loss.backward()
         # gradient norm clipping
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)  # this is a tunable hparam
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)  # this is a tunable hparam
         # Update the weights.
         optimizer.step()
 
@@ -113,16 +113,19 @@ if __name__ == '__main__':
     pretrained = args['pretrained']
     pretrained = True
     early_stop_thresh = 10
-    loss_function = "focal"
+    loss_function = "seesaw"
     batch_size = 32
     num_dataloader_workers = 8
     image_resize = 224
     validation_frac = 0.1
+    max_norm = 1.0
     fine_tune_after_n_epochs = 4
     model_file_path = str(
         CHECKPOINT_DIR /
-        f"best_model_{loss_function}_batch_{32}_lr_{lr: .3f}_unfreeze_epoch_{fine_tune_after_n_epochs}.pth")
+        f"best_model_{loss_function}_batch_{32}_lr_{lr: .3f}_unfreeze_epoch_{fine_tune_after_n_epochs}_trivialaug.pth")
     resume_from_checkpoint = model_file_path if Path(model_file_path).exists() else None
+
+    torch.autograd.set_detect_anomaly(True)
 
     # Load the training and validation datasets.
     dataset_train, dataset_valid, dataset_classes = get_datasets(args['pretrained'], image_resize, validation_frac)
@@ -186,7 +189,7 @@ if __name__ == '__main__':
 
         print(f"[INFO]: Epoch {epoch + 1} of {epochs}")
         train_epoch_loss, train_epoch_acc = train(model, train_loader,
-                                                  optimizer, criterion, loss_function)
+                                                  optimizer, criterion, loss_function, max_norm)
         valid_epoch_loss, valid_epoch_acc = validate(model, valid_loader,
                                                      criterion, loss_function)
         train_loss.append(train_epoch_loss)
