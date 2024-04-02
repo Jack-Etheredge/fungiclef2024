@@ -3,10 +3,42 @@ modified from https://debuggercafe.com/transfer-learning-using-efficientnet-pyto
 """
 
 import torchvision.models as models
+import torch
 import torch.nn as nn
 
 
-def build_model(pretrained=True, fine_tune=True, num_classes=10):
+class GaussianNoise(nn.Module):
+    """
+    https://discuss.pytorch.org/t/writing-a-simple-gaussian-noise-layer-in-pytorch/4694/7
+
+    Gaussian noise regularizer.
+
+    Args:
+        sigma (float, optional): relative standard deviation used to generate the
+            noise. Relative means that it will be multiplied by the magnitude of
+            the value you are adding the noise to. This means that sigma can be
+            the same regardless of the scale of the vector.
+        is_relative_detach (bool, optional): whether to detach the variable before
+            computing the scale of the noise. If `False` then the scale of the noise
+            won't be seen as a constant but something to optimize: this will bias the
+            network to generate vectors with smaller values.
+    """
+
+    def __init__(self, sigma=0.1, is_relative_detach=True):
+        super().__init__()
+        self.sigma = sigma
+        self.is_relative_detach = is_relative_detach
+        self.register_buffer('noise', torch.tensor(0))
+
+    def forward(self, x):
+        if self.training and self.sigma != 0:
+            scale = self.sigma * x.detach() if self.is_relative_detach else self.sigma * x
+            sampled_noise = self.noise.expand(*x.size()).float().normal_() * scale
+            x = x + sampled_noise
+        return x
+
+
+def build_model(pretrained=True, fine_tune=True, num_classes=10, dropout_rate=0.5):
     if pretrained:
         print('[INFO]: Loading pre-trained weights')
     else:
@@ -22,6 +54,7 @@ def build_model(pretrained=True, fine_tune=True, num_classes=10):
         for params in model.parameters():
             params.requires_grad = False
     # Change the final classification head.
+    model.classifier[0] = nn.Dropout(p=dropout_rate, inplace=True)
     model.classifier[1] = nn.Linear(in_features=1280, out_features=num_classes)
     return model
 

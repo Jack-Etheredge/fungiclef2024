@@ -16,6 +16,8 @@ matplotlib = "^3.8.3"
 scikit-learn = "^1.4.1.post1"
 seesawloss = "^0.1.1"
 focal-loss-torch = "^0.1.2"
+imbalanced-learn = "^0.12.0"
+torch-lr-finder = "^0.2.1"
 
 [tool.poetry.dev-dependencies]
 
