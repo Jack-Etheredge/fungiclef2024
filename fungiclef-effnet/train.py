@@ -177,7 +177,7 @@ if __name__ == '__main__':
     lr = 8e-4
     pretrained = True
     early_stop_thresh = 10
-    loss_function = "crossentropy"
+    loss_function = "seesaw"
     batch_size = 128
     num_dataloader_workers = 16
     image_resize = 224
@@ -189,11 +189,12 @@ if __name__ == '__main__':
     oversample_prop = 0.1
     dropout_rate = 0.5
     weight_decay = 1e-5
-    balanced_sampler = True
+    balanced_sampler = False
     use_lr_finder = False
     if balanced_sampler and (oversample or undersample):
         raise ValueError("cannot use balanced sampler with oversample or undersample")
     fine_tune_after_n_epochs = 4
+    skip_frozen_epochs_load_failed_model = True
     model_file_path = str(
         CHECKPOINT_DIR /
         f"best_model_{loss_function}_batch_{batch_size}_lr_{lr: .6f}_dropout_{dropout_rate: .2f}_weight_decay_{weight_decay: .6f}_unfreeze_epoch_{fine_tune_after_n_epochs}_over_{oversample}_over_prop_{oversample_prop}_under_{undersample}_balanced_sampler_{balanced_sampler}_equal_undersampled_val_{equal_undersampled_val}_trivialaug.pth")
@@ -274,7 +275,8 @@ if __name__ == '__main__':
     unfrozen = fine_tune_after_n_epochs == 0
     for epoch in range(epochs):
 
-        if not unfrozen and epoch + 1 > fine_tune_after_n_epochs:
+        if (not unfrozen and (skip_frozen_epochs_load_failed_model or
+                              epoch + 1 > fine_tune_after_n_epochs)):
             model = unfreeze_model(model)
             print("all layers unfrozen")
             parameters = add_weight_decay(model, weight_decay=weight_decay)
@@ -330,7 +332,7 @@ if __name__ == '__main__':
             print("Early stopped training at epoch %d" % epoch)
             break  # terminate the training loop
         else:
-            print(f"model did not improve from best epoch {best_epoch} with loss {best_validation_loss}")
+            print(f"model did not improve from best epoch {best_epoch + 1} with loss {best_validation_loss: .3f}")
         print('-' * 50)
         time.sleep(5)
 

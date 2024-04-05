@@ -1,6 +1,6 @@
 import pandas as pd
 from pathlib import Path
-from sklearn.metrics import f1_score
+from sklearn.metrics import f1_score, accuracy_score, balanced_accuracy_score
 import numpy as np
 
 
@@ -19,8 +19,10 @@ def get_threshold(max_prob_list, k):
 
 
 if __name__ == "__main__":
-    input_csv_path = "submission_fine_tuned_thresholding_seesaw.csv"
-    output_csv_path = "threshold_scores_seesaw.csv"
+    # input_csv_path = "submission_fine_tuned_thresholding_seesaw.csv"
+    # output_csv_path = "threshold_scores_seesaw.csv"
+    input_csv_path = "submission_fine_tuned_thresholding_seesaw_04_02_2024.csv"
+    output_csv_path = "threshold_scores_seesaw_04_02_2024.csv"
     data_dir = Path('__file__').parent.absolute().parent / "data" / "DF21"
     metadata_file_path = "./FungiCLEF2023_val_metadata_PRODUCTION.csv"
     test_metadata = pd.read_csv(metadata_file_path)
@@ -34,8 +36,9 @@ if __name__ == "__main__":
     thresholds = []
 
     y_pred = np.copy(submission_df["class_id"].values)
-    threshold = None
+    best_threshold, threshold = None, None
     score = f1_score(y_true, y_pred, average='macro')
+    best_f1 = score
     thresholds.append(threshold)
     scores.append(score)
 
@@ -43,6 +46,9 @@ if __name__ == "__main__":
         y_pred = np.copy(submission_df["class_id"].values)
         y_pred[y_proba < threshold] = -1
         score = f1_score(y_true, y_pred, average='macro')
+        if score > best_f1:
+            best_f1 = score
+            best_threshold = threshold
         print(threshold, score)
         thresholds.append(threshold)
         scores.append(score)
@@ -51,6 +57,9 @@ if __name__ == "__main__":
         y_pred = np.copy(submission_df["class_id"].values)
         y_pred[y_proba < threshold] = -1
         score = f1_score(y_true, y_pred, average='macro')
+        if score > best_f1:
+            best_f1 = score
+            best_threshold = threshold
         print(f"iqr_k{k}", threshold, score)
         thresholds.append(threshold)
         scores.append(score)
@@ -58,3 +67,21 @@ if __name__ == "__main__":
     threshold_scores['threshold'] = thresholds
     threshold_scores['f1'] = scores
     threshold_scores.sort_values('f1').to_csv(output_csv_path, index=False)
+
+    # check disparity between training validation accuracy and validation set accuracy
+    y_pred_on_known = y_pred[~(y_true == -1)]
+    y_true_on_known = y_true[~(y_true == -1)]
+    print("balanced accuracy on known classes:", balanced_accuracy_score(y_true_on_known, y_pred_on_known))
+    print("unbalanced accuracy on known classes:", accuracy_score(y_true_on_known, y_pred_on_known))
+
+    # check unknown vs known binary f1 using best threshold
+    y_pred = np.copy(submission_df["class_id"].values)
+    y_pred[y_proba < best_threshold] = -1
+    y_true_known_vs_unknown = y_true.copy()
+    y_true_known_vs_unknown[~(y_true == -1)] = 0
+    y_true_known_vs_unknown[(y_true == -1)] = 1
+    y_pred_known_vs_unknown = y_pred.copy()
+    y_pred_known_vs_unknown[~(y_pred == -1)] = 0
+    y_pred_known_vs_unknown[(y_pred == -1)] = 1
+    print("F1 binary known vs unknown:", f1_score(y_true_known_vs_unknown, y_pred_known_vs_unknown, average='binary'))
+    print("F1 macro known vs unknown:", f1_score(y_true_known_vs_unknown, y_pred_known_vs_unknown, average='macro'))
