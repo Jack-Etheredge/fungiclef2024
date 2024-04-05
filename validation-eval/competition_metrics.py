@@ -77,6 +77,7 @@ def evaluate_csv(test_annotation_file: str, user_submission_file: str) -> List[d
     try:
         is_tsv = user_submission_file.endswith(".tsv")
         user_pred_df = pd.read_csv(user_submission_file, sep="\t" if is_tsv else ",")
+        user_pred_df.rename(columns={"observation_id": "observationID"}, inplace=True)
     except Exception:
         print("Could not read file submitted by the user.")
         raise ValueError("Could not read file submitted by the user.")

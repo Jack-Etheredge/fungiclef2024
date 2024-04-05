@@ -102,14 +102,15 @@ def make_submission(test_metadata, model_path, output_csv_path, images_root_path
                 predictions.append(-1)
                 max_probas.append(-1)
 
-    test_metadata["class_id"] = predictions
-    test_metadata["max_proba"] = max_probas
+    test_metadata.loc[:, "class_id"] = predictions
+    test_metadata.loc[:, "max_proba"] = max_probas
     test_metadata[["observation_id", "class_id", "max_proba"]].to_csv(output_csv_path, index=None)
 
 
 if __name__ == "__main__":
     MODEL_PATH = "../fungiclef-effnet/model_checkpoints/best_model_seesaw_batch_128_lr_ 0.000800_dropout_ 0.50_weight_decay_ 0.000010_unfreeze_epoch_4_over_False_over_prop_0.1_under_False_balanced_sampler_False_equal_undersampled_val_True_trivialaug.pth"
     predictions_output_csv_path = "submission_fine_tuned_thresholding_seesaw_04_02_2024.csv"
+    predictions_with_unknown_output_csv_path = "submission_with_unknowns_fine_tuned_thresholding_seesaw_04_02_2024.csv"
     metrics_output_csv_path = "threshold_scores_seesaw_04_02_2024.csv"
     scores_output_path = "seesaw_04_02_2024_scores.json"
 
@@ -183,11 +184,11 @@ if __name__ == "__main__":
     y_pred = np.copy(submission_df["class_id"].values)
     y_pred[y_proba < best_threshold] = -1
     y_true_known_vs_unknown = y_true.copy()
-    y_true_known_vs_unknown[~(y_true == -1)] = 0
-    y_true_known_vs_unknown[(y_true == -1)] = 1
+    y_true_known_vs_unknown[~(y_true == -1)] = 1  # 1 is known
+    y_true_known_vs_unknown[(y_true == -1)] = 0  # 0 is unknown
     y_pred_known_vs_unknown = y_pred.copy()
-    y_pred_known_vs_unknown[~(y_pred == -1)] = 0
-    y_pred_known_vs_unknown[(y_pred == -1)] = 1
+    y_pred_known_vs_unknown[~(y_pred == -1)] = 1
+    y_pred_known_vs_unknown[(y_pred == -1)] = 0
     f1_binary_known_vs_unknown = f1_score(y_true_known_vs_unknown, y_pred_known_vs_unknown, average='binary')
     homebrewed_scores['f1_binary_known_vs_unknown'] = f1_binary_known_vs_unknown
     print("F1 binary known vs unknown:", f1_binary_known_vs_unknown)
@@ -195,10 +196,14 @@ if __name__ == "__main__":
     homebrewed_scores['f1_macro_known_vs_unknown'] = f1_macro_known_vs_unknown
     print("F1 macro known vs unknown:", f1_macro_known_vs_unknown)
 
+    # make and save the unknown output csv
+    submission_df.loc[:, "class_id"] = y_pred
+    submission_df.to_csv(predictions_with_unknown_output_csv_path, index=False)
+
     # add additional competition metrics
     competition_metrics_scores = evaluate(
         test_annotation_file=metadata_file_path,
-        user_submission_file=predictions_output_csv_path,
+        user_submission_file=predictions_with_unknown_output_csv_path,
         phase_codename="prediction-based",
     )
     competition_metrics_scores.update(homebrewed_scores)

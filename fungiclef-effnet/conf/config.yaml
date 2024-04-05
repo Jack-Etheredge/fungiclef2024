@@ -1,0 +1,23 @@
+train:
+  experiment_id: null
+  epochs: 200
+  lr: 8e-4
+  pretrained: True
+  early_stop_thresh: 10
+  loss_function: "crossentropy"
+  batch_size: 128
+  num_dataloader_workers: 16
+  image_resize: 224
+  validation_frac: 0.1
+  max_norm: 1.0
+  undersample: False
+  oversample: False
+  equal_undersampled_val: True
+  oversample_prop: 0.1
+  dropout_rate: 0.5
+  weight_decay: 1e-5
+  balanced_sampler: True
+  use_lr_finder: False
+  fine_tune_after_n_epochs: 4
+  skip_frozen_epochs_load_failed_model: True
+  notes: model is efficientnet_b0 with imagenet weights
