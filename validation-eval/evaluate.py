@@ -1,3 +1,5 @@
+import json
+
 import pandas as pd
 import numpy as np
 import os
@@ -13,6 +15,7 @@ import torch
 from pathlib import Path
 from PIL import ImageFile
 from scipy.special import softmax
+from competition_metrics import evaluate
 
 np.set_printoptions(precision=5)
 ImageFile.LOAD_TRUNCATED_IMAGES = True
@@ -108,6 +111,7 @@ if __name__ == "__main__":
     MODEL_PATH = "../fungiclef-effnet/model_checkpoints/best_model_seesaw_batch_128_lr_ 0.000800_dropout_ 0.50_weight_decay_ 0.000010_unfreeze_epoch_4_over_False_over_prop_0.1_under_False_balanced_sampler_False_equal_undersampled_val_True_trivialaug.pth"
     predictions_output_csv_path = "submission_fine_tuned_thresholding_seesaw_04_02_2024.csv"
     metrics_output_csv_path = "threshold_scores_seesaw_04_02_2024.csv"
+    scores_output_path = "seesaw_04_02_2024_scores.json"
 
     data_dir = Path('__file__').parent.absolute().parent / "data" / "DF21"
     metadata_file_path = "../metadata/FungiCLEF2023_val_metadata_PRODUCTION.csv"
@@ -164,11 +168,16 @@ if __name__ == "__main__":
     threshold_scores['f1'] = scores
     threshold_scores.sort_values('f1').to_csv(metrics_output_csv_path, index=False)
 
+    homebrewed_scores = dict()
     # check disparity between training validation accuracy and validation set accuracy
     y_pred_on_known = y_pred[~(y_true == -1)]
     y_true_on_known = y_true[~(y_true == -1)]
-    print("balanced accuracy on known classes:", balanced_accuracy_score(y_true_on_known, y_pred_on_known))
-    print("unbalanced accuracy on known classes:", accuracy_score(y_true_on_known, y_pred_on_known))
+    balanced_accuracy_known_classes = balanced_accuracy_score(y_true_on_known, y_pred_on_known)
+    homebrewed_scores['balanced_accuracy_known_classes'] = balanced_accuracy_known_classes
+    print("balanced accuracy on known classes:", balanced_accuracy_known_classes)
+    accuracy_known_classes = accuracy_score(y_true_on_known, y_pred_on_known)
+    homebrewed_scores['accuracy_known_classes'] = accuracy_known_classes
+    print("unbalanced accuracy on known classes:", accuracy_known_classes)
 
     # check unknown vs known binary f1 using best threshold
     y_pred = np.copy(submission_df["class_id"].values)
@@ -179,11 +188,22 @@ if __name__ == "__main__":
     y_pred_known_vs_unknown = y_pred.copy()
     y_pred_known_vs_unknown[~(y_pred == -1)] = 0
     y_pred_known_vs_unknown[(y_pred == -1)] = 1
-    print("F1 binary known vs unknown:",
-          f1_score(y_true_known_vs_unknown, y_pred_known_vs_unknown, average='binary'))
-    print("F1 macro known vs unknown:", f1_score(y_true_known_vs_unknown, y_pred_known_vs_unknown, average='macro'))
+    f1_binary_known_vs_unknown = f1_score(y_true_known_vs_unknown, y_pred_known_vs_unknown, average='binary')
+    homebrewed_scores['f1_binary_known_vs_unknown'] = f1_binary_known_vs_unknown
+    print("F1 binary known vs unknown:", f1_binary_known_vs_unknown)
+    f1_macro_known_vs_unknown = f1_score(y_true_known_vs_unknown, y_pred_known_vs_unknown, average='macro')
+    homebrewed_scores['f1_macro_known_vs_unknown'] = f1_macro_known_vs_unknown
+    print("F1 macro known vs unknown:", f1_macro_known_vs_unknown)
 
-    # TODO: implement additional competition metrics
+    # add additional competition metrics
+    competition_metrics_scores = evaluate(
+        test_annotation_file=metadata_file_path,
+        user_submission_file=predictions_output_csv_path,
+        phase_codename="prediction-based",
+    )
+    competition_metrics_scores.update(homebrewed_scores)
+    with open(scores_output_path, "w") as f:
+        json.dump(competition_metrics_scores, f)
+
     # TODO: add this evaluation functionality to the training script
-    # TODO: log the metrics output by this script to a report file
     # TODO: refactor this code to be more reusable
