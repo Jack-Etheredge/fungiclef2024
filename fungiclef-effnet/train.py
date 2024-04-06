@@ -19,7 +19,8 @@ from omegaconf import DictConfig, OmegaConf
 
 from model import build_model, unfreeze_model
 from datasets import get_datasets, get_data_loaders
-from utils import save_model, save_plots, checkpoint_model
+from evaluate import evaluate_experiment
+from utils import save_plots, checkpoint_model
 from losses import SeesawLoss
 
 CHECKPOINT_DIR = Path('__file__').parent.absolute() / "model_checkpoints"
@@ -281,8 +282,6 @@ def train_model(cfg: DictConfig) -> None:
                 train_loader, valid_loader = get_data_loaders(dataset_train, dataset_valid, batch_size,
                                                               num_dataloader_workers,
                                                               balanced_sampler=balanced_sampler)
-                train_epoch_loss, train_epoch_acc = train(model, train_loader,
-                                                          optimizer, criterion, loss_function, max_norm, device)
 
         recreate_loader = True
         while recreate_loader:
@@ -297,8 +296,7 @@ def train_model(cfg: DictConfig) -> None:
                 train_loader, valid_loader = get_data_loaders(dataset_train, dataset_valid, batch_size,
                                                               num_dataloader_workers,
                                                               balanced_sampler=balanced_sampler)
-                valid_epoch_loss, valid_epoch_acc = validate(model, valid_loader,
-                                                             criterion, loss_function, device)
+
         train_loss.append(train_epoch_loss)
         valid_loss.append(valid_epoch_loss)
         train_acc.append(train_epoch_acc)
@@ -324,6 +322,10 @@ def train_model(cfg: DictConfig) -> None:
     save_plots(train_acc, valid_acc, train_loss, valid_loss, pretrained, accuracy_plot_path=accuracy_plot_path,
                loss_plot_path=loss_plot_path)
     print('TRAINING COMPLETE')
+
+    print('evaluating')
+    evaluate_experiment(experiment_id=experiment_id)
+    print('EVALUATION COMPLETE')
 
 
 if __name__ == '__main__':
