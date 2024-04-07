@@ -4,7 +4,7 @@ train:
   lr: 8e-4
   pretrained: True
   early_stop_thresh: 10
-  loss_function: "crossentropy"
+  loss_function: "seesaw"
   batch_size: 128
   num_dataloader_workers: 16
   image_resize: 224
@@ -16,8 +16,8 @@ train:
   oversample_prop: 0.1
   dropout_rate: 0.5
   weight_decay: 1e-5
-  balanced_sampler: True
+  balanced_sampler: False
   use_lr_finder: False
   fine_tune_after_n_epochs: 4
-  skip_frozen_epochs_load_failed_model: True
-  notes: model is efficientnet_b0 with imagenet weights
+  skip_frozen_epochs_load_failed_model: False
+  notes: model is efficientnet_b0 with imagenet weights and autoaug augmentations

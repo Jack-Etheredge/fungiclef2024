@@ -208,6 +208,6 @@ def evaluate_experiment(experiment_id):
 
 
 if __name__ == "__main__":
-    experiment_id = "2024-04-05 18:30:16.161248"
+    experiment_id = "2024-04-06 10:26:26.362953"
     print(f"evaluating experiment {experiment_id}")
     evaluate_experiment(experiment_id=experiment_id)

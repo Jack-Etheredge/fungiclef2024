@@ -1,0 +1,12 @@
+loss = "seesaw"
+batch_size = 128
+lr = 0.000800
+dropout = 0.50
+weight_decay = 0.000010
+unfreeze_epoch = 4
+over = False
+over_prop = 0.1
+under = False
+balanced_sampler = False
+equal_undersampled_val = True
+notes = efficientb0 + trivialaug

@@ -3,28 +3,64 @@ modified from these sources:
 https://debuggercafe.com/transfer-learning-using-efficientnet-pytorch/
 https://machinelearningmastery.com/managing-a-pytorch-training-process-with-checkpoints-and-early-stopping/
 """
-import json
-from datetime import datetime
 from pathlib import Path
 
 from focal_loss.focal_loss import FocalLoss
 import torch
+import argparse
 import torch.nn as nn
 import torch.optim as optim
 from torch_lr_finder import LRFinder
 import time
 from tqdm.auto import tqdm
-import hydra
-from omegaconf import DictConfig, OmegaConf
 
 from model import build_model, unfreeze_model
 from datasets import get_datasets, get_data_loaders
-from evaluate import evaluate_experiment
-from utils import save_plots, checkpoint_model
-from losses import SeesawLoss, SupConLoss
+from utils import save_model, save_plots, checkpoint_model
+from losses import SeesawLoss
 
 CHECKPOINT_DIR = Path('__file__').parent.absolute() / "model_checkpoints"
 CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
+
+
+# # construct the argument parser
+# parser = argparse.ArgumentParser()
+# parser.add_argument(
+#     '-e', '--epochs', type=int, default=25,
+#     help='Number of epochs to train our network for'
+# )
+# parser.add_argument(
+#     '-pt', '--pretrained', action='store_true',
+#     help='Whether to use pretrained weights or not'
+# )
+# parser.add_argument(
+#     '-lr', '--learning-rate', type=float,
+#     dest='learning_rate', default=1e-5,
+#     help='Learning rate for training the model'
+# )
+# args = vars(parser.parse_args())
+
+
+# def add_weight_decay(
+#         model,
+#         weight_decay=1e-5,
+#         skip_list=(nn.InstanceNorm1d, nn.InstanceNorm2d, nn.BatchNorm1d, nn.BatchNorm2d, nn.LayerNorm)):
+#     """
+#     https://discuss.pytorch.org/t/weight-decay-in-the-optimizers-is-a-bad-idea-especially-with-batchnorm/16994/12
+#     Using .modules() with an isinstance() check
+#     returns the model parameters for use with weight_decay
+#     """
+#     decay = []
+#     no_decay = []
+#     for module in model.modules():
+#         params = [p for p in module.parameters() if p.requires_grad]
+#         if isinstance(module, skip_list):
+#             no_decay.extend(params)
+#         else:
+#             decay.extend(params)
+#     return [
+#         {'params': no_decay, 'weight_decay': 0.},
+#         {'params': decay, 'weight_decay': weight_decay}]
 
 
 def add_weight_decay(model, weight_decay=1e-5, skip_list=()):
@@ -66,9 +102,9 @@ def get_wd_params(model: nn.Module):
 
 
 # Training function.
-def train(model, trainloader, optimizer, criterion, loss_function_id, max_norm, device='cpu'):
+def train(model, trainloader, optimizer, criterion, loss_function_id, max_norm):
     model.train()
-    print(f'Training with device {device}')
+    print('Training')
     train_running_loss = 0.0
     train_running_correct = 0
     m = nn.Softmax(dim=-1)
@@ -102,28 +138,28 @@ def train(model, trainloader, optimizer, criterion, loss_function_id, max_norm, 
 
 
 # Validation function.
-@torch.no_grad()
-def validate(model, testloader, criterion, loss_function_id, device='cpu'):
+def validate(model, testloader, criterion, loss_function_id):
     model.eval()
-    print(f'Validation with device {device}')
+    print('Validation')
     valid_running_loss = 0.0
     valid_running_correct = 0
-    m = nn.Softmax(dim=-1)
-    for i, data in tqdm(enumerate(testloader), total=len(testloader)):
-        image, labels = data
-        image = image.to(device)
-        labels = labels.to(device)
-        # Forward pass.
-        outputs = model(image)
-        # Calculate the loss.
-        if loss_function_id == "focal":
-            loss = criterion(m(outputs), labels)
-        else:
-            loss = criterion(outputs, labels)
-        valid_running_loss += loss.item()
-        # Calculate the accuracy.
-        _, preds = torch.max(outputs.data, 1)
-        valid_running_correct += (preds == labels).sum().item()
+    with torch.no_grad():
+        m = nn.Softmax(dim=-1)
+        for i, data in tqdm(enumerate(testloader), total=len(testloader)):
+            image, labels = data
+            image = image.to(device)
+            labels = labels.to(device)
+            # Forward pass.
+            outputs = model(image)
+            # Calculate the loss.
+            if loss_function_id == "focal":
+                loss = criterion(m(outputs), labels)
+            else:
+                loss = criterion(outputs, labels)
+            valid_running_loss += loss.item()
+            # Calculate the accuracy.
+            _, preds = torch.max(outputs.data, 1)
+            valid_running_correct += (preds == labels).sum().item()
 
     # Loss and accuracy for the complete epoch.
     epoch_loss = valid_running_loss / i + 1
@@ -131,60 +167,45 @@ def validate(model, testloader, criterion, loss_function_id, device='cpu'):
     return epoch_loss, epoch_acc
 
 
-@hydra.main(version_base=None, config_path="conf", config_name="config")
-def train_model(cfg: DictConfig) -> None:
-    print(OmegaConf.to_yaml(cfg))
-    epochs = cfg["train"]["epochs"]
-    lr = cfg["train"]["lr"]
-    pretrained = cfg["train"]["pretrained"]
-    early_stop_thresh = cfg["train"]["early_stop_thresh"]
-    loss_function = cfg["train"]["loss_function"]
-    batch_size = cfg["train"]["batch_size"]
-    num_dataloader_workers = cfg["train"]["num_dataloader_workers"]
-    image_resize = cfg["train"]["image_resize"]
-    validation_frac = cfg["train"]["validation_frac"]
-    max_norm = cfg["train"]["max_norm"]
-    undersample = cfg["train"]["undersample"]
-    oversample = cfg["train"]["oversample"]
-    equal_undersampled_val = cfg["train"]["equal_undersampled_val"]
-    oversample_prop = cfg["train"]["oversample_prop"]
-    dropout_rate = cfg["train"]["dropout_rate"]
-    weight_decay = cfg["train"]["weight_decay"]
-    balanced_sampler = cfg["train"]["balanced_sampler"]
-    use_lr_finder = cfg["train"]["use_lr_finder"]
-    fine_tune_after_n_epochs = cfg["train"]["fine_tune_after_n_epochs"]
-    skip_frozen_epochs_load_failed_model = cfg["train"]["skip_frozen_epochs_load_failed_model"]
+if __name__ == '__main__':
 
-    for k, v in cfg["train"].items():
-        if v == "None" or v == "null":
-            url = "https://stackoverflow.com/questions/76567692/hydra-how-to-express-none-in-config-files"
-            raise ValueError(f"`{k}` set to 'None' or 'null'. Use `null` for None values in hydra; see {url}")
-
-    experiment_id = cfg["train"]["experiment_id"]
-    if experiment_id is None:
-        experiment_id = str(datetime.now())
-        cfg["train"]["experiment_id"] = experiment_id
-
+    # Learning_parameters.
+    # lr = args['learning_rate']
+    # epochs = args['epochs']
+    # pretrained = args['pretrained']
+    epochs = 200
+    lr = 8e-4
+    pretrained = True
+    early_stop_thresh = 10
+    loss_function = "seesaw"
+    batch_size = 128
+    num_dataloader_workers = 16
+    image_resize = 224
+    validation_frac = 0.1
+    max_norm = 1.0
+    undersample = False
+    oversample = False
+    equal_undersampled_val = True
+    oversample_prop = 0.1
+    dropout_rate = 0.5
+    weight_decay = 1e-5
+    balanced_sampler = False
+    use_lr_finder = False
     if balanced_sampler and (oversample or undersample):
         raise ValueError("cannot use balanced sampler with oversample or undersample")
-
-    # use experiment_id to save model checkpoint, graphs, predictions, performance metrics, etc
-    experiment_dir = CHECKPOINT_DIR / experiment_id
-    experiment_dir.mkdir(parents=True, exist_ok=True)
-    model_file_path = str(experiment_dir / f"model.pth")
-    accuracy_plot_path = str(experiment_dir / "accuracy_plot.png")
-    loss_plot_path = str(experiment_dir / "loss_plot.png")
-    config_dict = OmegaConf.to_container(cfg, resolve=True)
-    with open(str(experiment_dir / "experiment_config.json"), "w") as f:
-        json.dump(config_dict, f)
+    fine_tune_after_n_epochs = 4
+    skip_frozen_epochs_load_failed_model = True
+    model_file_path = str(
+        CHECKPOINT_DIR /
+        f"best_model_{loss_function}_batch_{batch_size}_lr_{lr: .6f}_dropout_{dropout_rate: .2f}_weight_decay_{weight_decay: .6f}_unfreeze_epoch_{fine_tune_after_n_epochs}_over_{oversample}_over_prop_{oversample_prop}_under_{undersample}_balanced_sampler_{balanced_sampler}_equal_undersampled_val_{equal_undersampled_val}_trivialaug.pth")
+    resume_from_checkpoint = model_file_path if Path(model_file_path).exists() else None
 
     torch.autograd.set_detect_anomaly(True)
 
     # Load the training and validation datasets.
     dataset_train, dataset_valid, dataset_classes = get_datasets(pretrained, image_resize, validation_frac,
                                                                  oversample=oversample, undersample=undersample,
-                                                                 oversample_prop=oversample_prop,
-                                                                 equal_undersampled_val=equal_undersampled_val)
+                                                                 oversample_prop=oversample_prop)
     n_classes = len(dataset_classes)
     print(f"[INFO]: Number of training images: {len(dataset_train)}")
     print(f"[INFO]: Number of validation images: {len(dataset_valid)}")
@@ -207,10 +228,7 @@ def train_model(cfg: DictConfig) -> None:
     parameters = add_weight_decay(model, weight_decay=weight_decay)
     optimizer = optim.AdamW(parameters, lr=lr)
 
-    # TODO: refine/replace this logic
-    resume_from_checkpoint = model_file_path if Path(model_file_path).exists() else None
     if resume_from_checkpoint:
-        print(f"resuming from checkpoint: {model_file_path}")
         # https://pytorch.org/tutorials/beginner/saving_loading_models.html
         checkpoint = torch.load(resume_from_checkpoint)
         # optimizer = optim.Adam(model.parameters(), lr=lr)
@@ -221,12 +239,9 @@ def train_model(cfg: DictConfig) -> None:
             optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         except Exception as e:
             print(f"unable to load optimizer state due to {e}")
-        # TODO: use the epoch and loss from the checkpoint
         start_epoch = checkpoint['epoch']
         loss = checkpoint['loss']
         model.to(device)
-    else:
-        print(f"training new model: {experiment_id}")
 
     # Total parameters and trainable parameters.
     total_params = sum(p.numel() for p in model.parameters())
@@ -273,21 +288,23 @@ def train_model(cfg: DictConfig) -> None:
         while recreate_loader:
             try:
                 train_epoch_loss, train_epoch_acc = train(model, train_loader,
-                                                          optimizer, criterion, loss_function, max_norm, device)
+                                                          optimizer, criterion, loss_function, max_norm)
                 recreate_loader = False
             except Exception as e:
-                print("issue with training")
+                print("issue with trining")
                 print(e)
                 print("recreating data loaders and trying again")
                 train_loader, valid_loader = get_data_loaders(dataset_train, dataset_valid, batch_size,
                                                               num_dataloader_workers,
                                                               balanced_sampler=balanced_sampler)
+                train_epoch_loss, train_epoch_acc = train(model, train_loader,
+                                                          optimizer, criterion, loss_function, max_norm)
 
         recreate_loader = True
         while recreate_loader:
             try:
                 valid_epoch_loss, valid_epoch_acc = validate(model, valid_loader,
-                                                             criterion, loss_function, device)
+                                                             criterion, loss_function)
                 recreate_loader = False
             except Exception as e:
                 print("issue with validation")
@@ -296,7 +313,8 @@ def train_model(cfg: DictConfig) -> None:
                 train_loader, valid_loader = get_data_loaders(dataset_train, dataset_valid, batch_size,
                                                               num_dataloader_workers,
                                                               balanced_sampler=balanced_sampler)
-
+                valid_epoch_loss, valid_epoch_acc = validate(model, valid_loader,
+                                                             criterion, loss_function)
         train_loss.append(train_epoch_loss)
         valid_loss.append(valid_epoch_loss)
         train_acc.append(train_epoch_acc)
@@ -318,15 +336,8 @@ def train_model(cfg: DictConfig) -> None:
         print('-' * 50)
         time.sleep(5)
 
+    # Save the trained model weights.
+    save_model(epochs, model, optimizer, criterion, pretrained)
     # Save the loss and accuracy plots.
-    save_plots(train_acc, valid_acc, train_loss, valid_loss, pretrained, accuracy_plot_path=accuracy_plot_path,
-               loss_plot_path=loss_plot_path)
+    save_plots(train_acc, valid_acc, train_loss, valid_loss, pretrained)
     print('TRAINING COMPLETE')
-
-    print('evaluating')
-    evaluate_experiment(experiment_id=experiment_id)
-    print('EVALUATION COMPLETE')
-
-
-if __name__ == '__main__':
-    train_model()

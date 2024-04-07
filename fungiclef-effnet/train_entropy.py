@@ -66,7 +66,7 @@ def get_wd_params(model: nn.Module):
 
 
 # Training function.
-def train(model, trainloader, optimizer, criterion, loss_function_id, max_norm, device='cpu'):
+def train(model, trainloader, optimizer, criterion, loss_function_id, max_norm, n_classes, device='cpu'):
     model.train()
     print(f'Training with device {device}')
     train_running_loss = 0.0
@@ -76,6 +76,7 @@ def train(model, trainloader, optimizer, criterion, loss_function_id, max_norm, 
         image, labels = data
         image = image.to(device)
         labels = labels.to(device)
+        labels =
         optimizer.zero_grad()
         # Forward pass.
         outputs = model(image)
@@ -103,7 +104,7 @@ def train(model, trainloader, optimizer, criterion, loss_function_id, max_norm, 
 
 # Validation function.
 @torch.no_grad()
-def validate(model, testloader, criterion, loss_function_id, device='cpu'):
+def validate(model, testloader, criterion, loss_function_id, n_classes, device='cpu'):
     model.eval()
     print(f'Validation with device {device}')
     valid_running_loss = 0.0
@@ -162,8 +163,7 @@ def train_model(cfg: DictConfig) -> None:
 
     experiment_id = cfg["train"]["experiment_id"]
     if experiment_id is None:
-        experiment_id = str(datetime.now())
-        cfg["train"]["experiment_id"] = experiment_id
+        raise ValueError("must select a trained model to fine tune for entropy-based unknown detection")
 
     if balanced_sampler and (oversample or undersample):
         raise ValueError("cannot use balanced sampler with oversample or undersample")
