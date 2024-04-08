@@ -122,6 +122,7 @@ def get_datasets(pretrained, image_size, validation_frac, oversample=False, unde
         transform=(get_train_transform(image_size, pretrained))
     )
     targets = dataset.target
+    # TODO: fix train and val both using train transformations
 
     if equal_undersampled_val:
         # get 4 samples per class for validation
