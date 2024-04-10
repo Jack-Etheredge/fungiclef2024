@@ -7,41 +7,64 @@ Choose best discriminator checkpoint for openGANfea
 """
 from pathlib import Path
 
-import numpy as np
-
 import torch
 import torchvision
 from sklearn.metrics import roc_auc_score
 from torch.utils.data import Dataset
-
-from torchvision.transforms import v2, InterpolationMode
+import hydra
+import numpy as np
+from omegaconf import DictConfig, OmegaConf
+from paths import CHECKPOINT_DIR
 from tqdm import tqdm
 
-from opengan.models import Discriminator
-from opengan.utils import CustomImageDataset, collate_fn, get_train_val_datasets
+from closedset_model import build_model
+from datasets import get_openset_datasets, get_datasets, get_closedset_test_dataset
+from openset_recognition_models import Discriminator
+from utils import CustomImageDataset, collate_fn, get_train_val_datasets
 
 
 # os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
 
 
-def main():
-    # HYPERPARAMETERS
-    batch_size = 128
+@hydra.main(version_base=None, config_path="conf", config_name="config")
+def main(cfg: DictConfig) -> None:
+    print(OmegaConf.to_yaml(cfg))
     # TODO: move the common elements to a config
-    nc = 512
+    nc = 1280  # pull from hydra
     hidden_dim = 64
     eval_fraction = 0.1
-    n_workers = 16
-    image_size = 224
-    max_total_examples = 1000
-    project_name = "opengan_fea_Res18sc_mlpGAN_dlr_1e-6_open1closed0_100_examples_no_gen"  # we save all the checkpoints in this directory
-    experiment_dir = Path('__file__').parent.absolute() / "opengan_exp"
-    discriminator_dir = experiment_dir / project_name
+    max_total_examples = 10_000  # TODO: reincorporate this
+    embedder_experiment_id = cfg["open-set-recognition"]["embedder_experiment_id"]
     openset_label = 1.
     closedset_label = 0.
+    project_name = f"{embedder_experiment_id}_dlr_1e-6_glr_1e-6_open{int(openset_label)}closed{int(closedset_label)}"  # we save all the checkpoints in this directory
+    exp_dir = Path(
+        '__file__').parent.absolute() / "openset_recognition_discriminators"  # experiment directory, used for reading the init model
+    discriminator_dir = exp_dir / project_name
+
+    embedder_experiment_id = cfg["open-set-recognition"]["embedder_experiment_id"]
+    embedder_layer_offset = cfg["open-set-recognition"]["embedder_layer_offset"]
+    batch_size = cfg["open-set-recognition"]["batch_size"]
+    n_workers = cfg["open-set-recognition"]["n_workers"]
+    openset_embeddings_name = cfg["open-set-recognition"]["openset_embeddings_name"]
+    closedset_embeddings_name = cfg["open-set-recognition"]["closedset_embeddings_name"]
+    image_size = cfg["open-set-recognition"]["image_size"]
+    openset_n_train = cfg["open-set-recognition"]["openset_n_train"]
+    openset_n_val = cfg["open-set-recognition"]["openset_n_val"]
+    pretrained = cfg["open-set-recognition"]["pretrained"]
+
+    # for closed set dataset
+    undersample = cfg["train"]["undersample"]
+    oversample = cfg["train"]["oversample"]
+    equal_undersampled_val = cfg["train"]["equal_undersampled_val"]
+    oversample_prop = cfg["train"]["oversample_prop"]
+    validation_frac = cfg["train"]["validation_frac"]
+
+    # for constructing model
+    n_classes = cfg["train"]["n_classes"]
 
     # set device, which gpu to use.
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
     print(f"using device {device}")
 
     # filtering for "discriminator" in model state checkpoint files necessary because generator and discriminator
@@ -49,44 +72,50 @@ def main():
     discriminators = [dis for dis in discriminator_dir.iterdir() if
                       dis.suffix == ".pth" and "discriminator" in dis.stem]
 
-    model = torchvision.models.resnet18(weights='DEFAULT').to(device)  # model is trained on Imagenet1K
-    feature_extractor = torch.nn.Sequential(*list(model.children())[:-1])
+    print("constructing embedder (closed set classifier outputting from penultimate layer)")
+    model = build_model(
+        pretrained=pretrained,
+        fine_tune=False,  # we don't need to unfreeze any weights
+        num_classes=n_classes,
+        dropout_rate=0.5,  # doesn't matter since embeddings will be created in eval on a fixed model
+    ).to(device)
+    experiment_dir = CHECKPOINT_DIR / embedder_experiment_id
+    experiment_dir.mkdir(parents=True, exist_ok=True)
+    model_file_path = str(experiment_dir / f"model.pth")
+    checkpoint = torch.load(model_file_path)
+    model.load_state_dict(checkpoint['model_state_dict'])
+    model.eval()
+    feature_extractor = torch.nn.Sequential(*list(model.children())[:embedder_layer_offset])
 
-    transforms = v2.Compose([
-        v2.Resize((image_size, image_size), interpolation=InterpolationMode.BILINEAR, antialias=True),
-        v2.Compose([v2.ToImage(), v2.ToDtype(torch.float32, scale=True)]),
-        v2.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))
-    ])
+    # transforms = v2.Compose([
+    #     v2.Resize((image_size, image_size), interpolation=InterpolationMode.BILINEAR, antialias=True),
+    #     v2.Compose([v2.ToImage(), v2.ToDtype(torch.float32, scale=True)]),
+    #     v2.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))
+    # ])
 
-    # generate embeddings for CIFAR10 since it's not in the training set for Imagenet1K
-    datasets_dir = Path("~").expanduser().absolute() / "datasets"
-    imagenet_dir = datasets_dir / "imagenet" / "val_images"
-    cifar10_dir = datasets_dir / "cifar10"
-    mnist_dir = datasets_dir / "mnist"
-    imagenet_dataset = CustomImageDataset(img_dir=imagenet_dir, transform=transforms)
-    cifar10_dataset = torchvision.datasets.CIFAR10(root=cifar10_dir, train=False,
-                                                   download=True, transform=transforms)
-    mnist_dataset = torchvision.datasets.MNIST(root=mnist_dir, train=False,
-                                               download=True, transform=transforms)
-    selection_imagenet_ds, eval_imagenet_ds = get_train_val_datasets(imagenet_dataset, max_total_examples,
-                                                                     eval_fraction)
-    selection_cifar10_ds, eval_cifar10_ds = get_train_val_datasets(cifar10_dataset, max_total_examples, eval_fraction)
-    # set up the model selection datasets (imagenet vs something other than cifar10)
-    closed_set_selection_loader = torch.utils.data.DataLoader(selection_imagenet_ds, batch_size=batch_size,
-                                                              shuffle=False, num_workers=n_workers,
-                                                              collate_fn=collate_fn)
-    open_set_selection_loader = torch.utils.data.DataLoader(selection_cifar10_ds, batch_size=batch_size,
-                                                            shuffle=False, num_workers=n_workers, collate_fn=collate_fn)
-    # set up the model evaluation datasets (different split of imagenet vs something other than cifar10)
-    closed_set_evaluation_loader = torch.utils.data.DataLoader(eval_imagenet_ds, batch_size=batch_size,
-                                                               shuffle=False, num_workers=n_workers,
-                                                               collate_fn=collate_fn)
-    open_set_evaluation_loader = torch.utils.data.DataLoader(eval_cifar10_ds, batch_size=batch_size,
-                                                             shuffle=False, num_workers=n_workers,
-                                                             collate_fn=collate_fn)
-    open_set_two_evaluation_loader = torch.utils.data.DataLoader(mnist_dataset, batch_size=batch_size,
-                                                                 shuffle=False, num_workers=n_workers,
-                                                                 collate_fn=collate_fn)
+    _, openset_dataset_val, openset_dataset_test = get_openset_datasets(pretrained=pretrained, image_size=image_size,
+                                                                        n_train=openset_n_train, n_val=openset_n_val)
+    open_set_selection_loader = torch.utils.data.DataLoader(openset_dataset_val, batch_size=batch_size,
+                                                            shuffle=False, num_workers=4, collate_fn=collate_fn,
+                                                            timeout=120)  # TODO: move to hydra
+    open_set_evaluation_loader = torch.utils.data.DataLoader(openset_dataset_test, batch_size=batch_size,
+                                                             shuffle=False, num_workers=4,
+                                                             collate_fn=collate_fn,
+                                                             timeout=120)  # TODO: move to hydra
+    _, closedset_dataset_val, _ = get_datasets(pretrained=pretrained, image_size=image_size,
+                                               validation_frac=validation_frac,
+                                               oversample=oversample, undersample=undersample,
+                                               oversample_prop=oversample_prop,
+                                               equal_undersampled_val=equal_undersampled_val)
+    closed_set_selection_loader = torch.utils.data.DataLoader(closedset_dataset_val, batch_size=batch_size,
+                                                              shuffle=False, num_workers=4,
+                                                              collate_fn=collate_fn,
+                                                              timeout=120)  # TODO: move to hydra
+    closedset_dataset_test = get_closedset_test_dataset(pretrained, image_size)
+    closed_set_evaluation_loader = torch.utils.data.DataLoader(closedset_dataset_test, batch_size=batch_size,
+                                                               shuffle=False, num_workers=4,
+                                                               collate_fn=collate_fn,
+                                                               timeout=120)  # TODO: move to hydra
 
     # generate embeddings and labels to select the model
     embeddings = []
@@ -139,7 +168,7 @@ def main():
     # generate embeddings and labels to evaluate the model
     embeddings = []
     labels = []
-    print("generate open set embeddings and labels to select the model")
+    print("generate closed set embeddings and labels to select the model")
     for data in tqdm(closed_set_evaluation_loader):
         images, _ = data
         images = images.to(device)
@@ -171,80 +200,13 @@ def main():
            f"with selection roc-auc {best_rocauc} "
            f"and evaluation roc-auc {eval_rocauc}"))
 
-    # generate embeddings and labels to evaluate the model on a third dataset
-    embeddings = []
-    labels = []
-    print("generate open set embeddings and labels to select the model")
-    for data in tqdm(closed_set_evaluation_loader):
-        images, _ = data
-        images = images.to(device)
-        outputs = feature_extractor(images).detach().cpu().numpy().squeeze()  # squeeze to use MLP instead of CNN
-        embeddings.append(outputs)
-        labels.extend([closedset_label] * outputs.shape[0])
-    print("generate open set embeddings and labels to select the model")
-    for data in tqdm(open_set_two_evaluation_loader):
-        images, _ = data
-        images = images.to(device)
-        outputs = feature_extractor(images).detach().cpu().numpy().squeeze()  # squeeze to use MLP instead of CNN
-        embeddings.append(outputs)
-        labels.extend([openset_label] * outputs.shape[0])
-    embeddings = np.concatenate(embeddings)
-    embeddings = torch.tensor(embeddings).to(device)
-
-    # evaluate selected model
-    print("evaluating model on additional (unseen) open dataset")
-    preds = []
-    with torch.no_grad():
-        for embedding in tqdm(embeddings):
-            y_pred_proba = best_discriminator_model(embedding.unsqueeze(0)).detach().cpu().numpy()
-            preds.append(y_pred_proba)
-    preds = np.array(preds).squeeze()
-
-    # evaluate roc-auc
-    eval_rocauc = roc_auc_score(labels, preds)
-    print((f"best discriminator: {best_discriminator_path} "
-           f"with selection roc-auc {best_rocauc} "
-           f"and evaluation roc-auc {eval_rocauc}"))
-
 
 if __name__ == "__main__":
     main()
-    # best discriminator: /home/jack/projects/fungiclef2024/opengan/opengan_exp/opengan_fea_Res18sc_mlpGAN_defaults_leakyrelu_adam_10x_relative_lr_tanh_to_leakyrelu_open0closed1_100_examples/epoch-1-discriminator.pth with selection roc-auc 0.8504518518518519 and evaluation roc-auc 0.8550000000000001
-    # best discriminator: /home/jack/projects/fungiclef2024/opengan/opengan_exp/opengan_fea_Res18sc_mlpGAN_defaults_leakyrelu_adam_10x_relative_lr_tanh_to_leakyrelu_open0closed1_100_examples/epoch-1-discriminator.pth with selection roc-auc 0.8504518518518519 and evaluation roc-auc 0.8818729999999999
-    # best discriminator: /home/jack/projects/fungiclef2024/opengan/opengan_exp/opengan_fea_Res18sc_mlpGAN_defaults_leakyrelu_adam_10x_relative_lr_tanh_to_leakyrelu_open1closed0_100_examples/epoch-2-discriminator.pth with selection roc-auc 0.8651820987654321 and evaluation roc-auc 0.8753999999999998
-    # best discriminator: /home/jack/projects/fungiclef2024/opengan/opengan_exp/opengan_fea_Res18sc_mlpGAN_defaults_leakyrelu_adam_10x_relative_lr_tanh_to_leakyrelu_open1closed0_100_examples/epoch-2-discriminator.pth with selection roc-auc 0.8651820987654321 and evaluation roc-auc 0.9086049999999999
-    # best discriminator: /home/jack/projects/fungiclef2024/opengan/opengan_exp/opengan_fea_Res18sc_mlpGAN_defaults_leakyrelu_adam_tanh_to_leakyrelu_open0closed1_100_examples/epoch-1-discriminator.pth with selection roc-auc 0.937320987654321 and evaluation roc-auc 0.9078
-    # best discriminator: /home/jack/projects/fungiclef2024/opengan/opengan_exp/opengan_fea_Res18sc_mlpGAN_defaults_leakyrelu_adam_tanh_to_leakyrelu_open0closed1_100_examples/epoch-1-discriminator.pth with selection roc-auc 0.937320987654321 and evaluation roc-auc 0.9551200000000001
-    # 1 for open set?
-    # lower lr?
-    # equal lr (better than 10x to generator)?
-    # best discriminator: /home/jack/projects/fungiclef2024/opengan/opengan_exp/opengan_fea_Res18sc_mlpGAN_lr_1e-5_open0closed1_100_examples/epoch-10-discriminator.pth with selection roc-auc 0.9435703703703704 and evaluation roc-auc 0.7775000000000001
-    # best discriminator: /home/jack/projects/fungiclef2024/opengan/opengan_exp/opengan_fea_Res18sc_mlpGAN_lr_1e-5_open0closed1_100_examples/epoch-10-discriminator.pth with selection roc-auc 0.9435703703703704 and evaluation roc-auc 0.842269
-    # best discriminator: /home/jack/projects/fungiclef2024/opengan/opengan_exp/opengan_fea_Res18sc_mlpGAN_lr_1e-4_open1closed0_100_examples/epoch-1-discriminator.pth with selection roc-auc 0.9214716049382715 and evaluation roc-auc 0.7641
-    # best discriminator: /home/jack/projects/fungiclef2024/opengan/opengan_exp/opengan_fea_Res18sc_mlpGAN_lr_1e-4_open1closed0_100_examples/epoch-1-discriminator.pth with selection roc-auc 0.9214716049382715 and evaluation roc-auc 0.801161
-    # best discriminator: /home/jack/projects/fungiclef2024/opengan/opengan_exp/opengan_fea_Res18sc_mlpGAN_lr_1e-3_open1closed0_100_examples/epoch-2-discriminator.pth with selection roc-auc 0.8843407407407408 and evaluation roc-auc 0.7222000000000001
-    # best discriminator: /home/jack/projects/fungiclef2024/opengan/opengan_exp/opengan_fea_Res18sc_mlpGAN_lr_1e-3_open1closed0_100_examples/epoch-2-discriminator.pth with selection roc-auc 0.8843407407407408 and evaluation roc-auc 0.721201
-    # best discriminator: /home/jack/projects/fungiclef2024/opengan/opengan_exp/opengan_fea_Res18sc_mlpGAN_lr_1e-3_open0closed1_100_examples/epoch-1-discriminator.pth with selection roc-auc 0.832206172839506 and evaluation roc-auc 0.8015
-    # best discriminator: /home/jack/projects/fungiclef2024/opengan/opengan_exp/opengan_fea_Res18sc_mlpGAN_lr_1e-3_open0closed1_100_examples/epoch-1-discriminator.pth with selection roc-auc 0.832206172839506 and evaluation roc-auc 0.868776
-    # best discriminator: /home/jack/projects/fungiclef2024/opengan/opengan_exp/opengan_fea_Res18sc_mlpGAN_lr_1e-4_open1closed0_100_examples/epoch-1-discriminator.pth with selection roc-auc 0.9133913580246913 and evaluation roc-auc 0.745
-    # best discriminator: /home/jack/projects/fungiclef2024/opengan/opengan_exp/opengan_fea_Res18sc_mlpGAN_lr_1e-4_open1closed0_100_examples/epoch-1-discriminator.pth with selection roc-auc 0.9133913580246913 and evaluation roc-auc 0.7925059999999999
-
-    # comparing with and without generator
-    # dlr_1e-5_glr_1e-3
-    # with generator
-    # best discriminator [same open set as training]: /home/jack/projects/fungiclef2024/opengan/opengan_exp/opengan_fea_Res18sc_mlpGAN_dlr_1e-5_glr_1e-3_open1closed0_100_examples/epoch-1-discriminator.pth with selection roc-auc 0.8610993827160495 and evaluation roc-auc 0.8275
-    # best discriminator [novel open set]: /home/jack/projects/fungiclef2024/opengan/opengan_exp/opengan_fea_Res18sc_mlpGAN_dlr_1e-5_glr_1e-3_open1closed0_100_examples/epoch-1-discriminator.pth with selection roc-auc 0.8610993827160495 and evaluation roc-auc 0.91899
-    # without generator
-    # best discriminator [same open set as training]: /home/jack/projects/fungiclef2024/opengan/opengan_exp/opengan_fea_Res18sc_mlpGAN_dlr_1e-5_glr_1e-3_open1closed0_100_examples_no_gen/epoch-7-discriminator.pth with selection roc-auc 0.9752641975308642 and evaluation roc-auc 0.9806
-    # best discriminator [novel open set]: /home/jack/projects/fungiclef2024/opengan/opengan_exp/opengan_fea_Res18sc_mlpGAN_dlr_1e-5_glr_1e-3_open1closed0_100_examples_no_gen/epoch-7-discriminator.pth with selection roc-auc 0.9752641975308642 and evaluation roc-auc 0.991023
-    # dlr_1e-5_glr_1e-5
-    # with generator
-    # best discriminator [same open set as training]: /home/jack/projects/fungiclef2024/opengan/opengan_exp/opengan_fea_Res18sc_mlpGAN_dlr_1e-5_glr_1e-5_open1closed0_100_examples/epoch-3-discriminator.pth with selection roc-auc 0.9283827160493828 and evaluation roc-auc 0.8421
-    # best discriminator [novel open set]: /home/jack/projects/fungiclef2024/opengan/opengan_exp/opengan_fea_Res18sc_mlpGAN_dlr_1e-5_glr_1e-5_open1closed0_100_examples/epoch-3-discriminator.pth with selection roc-auc 0.9283827160493828 and evaluation roc-auc 0.868428
-    # dlr_1e-6_glr_1e-6
-    # with generator
-    # best discriminator [same open set as training]: /home/jack/projects/fungiclef2024/opengan/opengan_exp/opengan_fea_Res18sc_mlpGAN_dlr_1e-6_glr_1e-6_open1closed0_100_examples/epoch-25-discriminator.pth with selection roc-auc 0.9318111111111111 and evaluation roc-auc 0.9517
-    # best discriminator [novel open set]: /home/jack/projects/fungiclef2024/opengan/opengan_exp/opengan_fea_Res18sc_mlpGAN_dlr_1e-6_glr_1e-6_open1closed0_100_examples/epoch-25-discriminator.pth with selection roc-auc 0.9318111111111111 and evaluation roc-auc 0.96971
-    # without generator
-    # best discriminator [same open set as training]: /home/jack/projects/fungiclef2024/opengan/opengan_exp/opengan_fea_Res18sc_mlpGAN_dlr_1e-6_open1closed0_100_examples_no_gen/epoch-23-discriminator.pth with selection roc-auc 0.9604679012345679 and evaluation roc-auc 0.9459
-    # best discriminator [novel open set]: /home/jack/projects/fungiclef2024/opengan/opengan_exp/opengan_fea_Res18sc_mlpGAN_dlr_1e-6_open1closed0_100_examples_no_gen/epoch-23-discriminator.pth with selection roc-auc 0.9604679012345679 and evaluation roc-auc 0.993128
+    # discriminator only:
+    # best discriminator: seesaw_04_02_2024_dlr_1e-6_open1closed0_no_gen/epoch-11-discriminator.pth
+    #   selection roc-auc 0.6117849906483791 and evaluation roc-auc 0.5604385963920865
+    # GAN open 1 closed 0:
+    # best discriminator: seesaw_04_02_2024_dlr_1e-6_open1closed0/epoch-10-discriminator.pth
+    #   selection roc-auc 0.6020331982543641
+    #

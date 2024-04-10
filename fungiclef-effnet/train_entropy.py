@@ -17,7 +17,7 @@ from tqdm.auto import tqdm
 import hydra
 from omegaconf import DictConfig, OmegaConf
 
-from model import build_model, unfreeze_model
+from closedset_model import build_model, unfreeze_model
 from datasets import get_datasets, get_data_loaders
 from evaluate import evaluate_experiment
 from utils import save_plots, checkpoint_model

@@ -9,19 +9,24 @@ import os
 from collections import Counter
 from pathlib import Path
 
+import cv2
 import numpy as np
 import pandas as pd
 import torch
 # from torchvision import datasets
-from PIL import Image
+from PIL import Image, ImageFile
 from imblearn.over_sampling import RandomOverSampler
 from imblearn.under_sampling import RandomUnderSampler
 from sklearn.model_selection import train_test_split
+from torchvision import transforms
 from torchvision.transforms import v2
 from torch.utils.data import DataLoader, Dataset, Subset
 from torchvision.transforms.v2 import InterpolationMode
 
+# dataset loading issue
+# https://github.com/eriklindernoren/PyTorch-YOLOv3/issues/162
 Image.MAX_IMAGE_PIXELS = None
+ImageFile.LOAD_TRUNCATED_IMAGES = True
 WORKER_TIMEOUT_SECS = 120
 DATA_DIR = Path('__file__').parent.absolute().parent / 'data'
 METADATA_DIR = Path('__file__').parent.absolute().parent / 'metadata'
@@ -80,33 +85,6 @@ def normalize_transform(pretrained):
     return normalize
 
 
-# def get_datasets_from_folder(pretrained):
-#     """
-#     Function to prepare the Datasets.
-#     :param pretrained: Boolean, True or False.
-#     Returns the training and validation datasets along
-#     with the class names.
-#     """
-#     ROOT_DIR = Path('__file__').parent.absolute().parent / 'data'
-#     dataset = datasets.ImageFolder(
-#         ROOT_DIR,
-#         transform=(get_train_transform(IMAGE_SIZE, pretrained))
-#     )
-#     dataset_test = datasets.ImageFolder(
-#         ROOT_DIR,
-#         transform=(get_valid_transform(IMAGE_SIZE, pretrained))
-#     )
-#     dataset_size = len(dataset)
-#     # Calculate the validation dataset size.
-#     valid_size = int(VALID_SPLIT * dataset_size)
-#     # Radomize the data indices.
-#     indices = torch.randperm(len(dataset)).tolist()
-#     # Training and validation sets.
-#     dataset_train = Subset(dataset, indices[:-valid_size])
-#     dataset_valid = Subset(dataset_test, indices[-valid_size:])
-#     return dataset_train, dataset_valid, dataset.classes
-
-
 def get_datasets(pretrained, image_size, validation_frac, oversample=False, undersample=False,
                  oversample_prop=0.1, equal_undersampled_val=True, seed=42):
     """
@@ -121,8 +99,12 @@ def get_datasets(pretrained, image_size, validation_frac, oversample=False, unde
         img_dir=DATA_DIR / "DF20",
         transform=(get_train_transform(image_size, pretrained))
     )
+    val_dataset = CustomImageDataset(
+        label_file_path=METADATA_DIR / "FungiCLEF2023_train_metadata_PRODUCTION.csv",
+        img_dir=DATA_DIR / "DF20",
+        transform=(get_valid_transform(image_size, pretrained))  # only difference
+    )
     targets = dataset.target
-    # TODO: fix train and val both using train transformations
 
     if equal_undersampled_val:
         # get 4 samples per class for validation
@@ -152,21 +134,26 @@ def get_datasets(pretrained, image_size, validation_frac, oversample=False, unde
 
     train_dataset = Subset(dataset, indices=train_indices)
     train_dataset.target = targets[train_indices]
-    val_dataset = Subset(dataset, indices=test_indices)
+    val_dataset = Subset(val_dataset, indices=test_indices)
     val_dataset.target = targets[test_indices]
     return train_dataset, val_dataset, dataset.classes
 
 
 class CustomImageDataset(Dataset):
     def __init__(self, label_file_path: str, img_dir: str,
-                 keep_only: set | None = None, transform=None,
+                 keep_only: set | None = None,
+                 exclude: set | None = None,
+                 transform=None,
                  target_transform=None):
         self.img_labels = pd.read_csv(label_file_path, dtype={"class_id": "int64"})
         self.img_labels = self.img_labels[["image_path", "class_id"]]
         self.img_dir = img_dir
         self.keep_only = keep_only
         if self.keep_only is not None:
-            self.img_labels = self.img_labels[self.img_labels["class_id"].isin(keep_only)]
+            self.img_labels = self.img_labels[self.img_labels["class_id"].isin(self.keep_only)]
+        self.exclude = exclude
+        if self.exclude is not None:
+            self.img_labels = self.img_labels[~self.img_labels["class_id"].isin(self.exclude)]
         self.transform = transform
         self.target_transform = target_transform
         self.classes = self.img_labels["class_id"].unique()
@@ -182,6 +169,7 @@ class CustomImageDataset(Dataset):
             # from torchvision.io import read_image
             # image = read_image(img_path)
             image = Image.open(img_path).convert('RGB')  # hopefully this handles greyscale cases
+            # image = transforms.ToPILImage()(cv2.cvtColor(cv2.imread(img_path), cv2.COLOR_BGR2RGB))
             label = self.img_labels.iloc[idx, 1]
             if self.transform:
                 image = self.transform(image)
@@ -255,29 +243,53 @@ def get_data_loaders(train_dataset, val_dataset, batch_size, num_workers, balanc
     return train_loader, valid_loader
 
 
-def get_openset_recognition_datasets(pretrained, image_size, validation_frac,
-                                     oversample=False, undersample=False,
-                                     oversample_prop=0.1, equal_undersampled_val=True, seed=42):
+def get_openset_datasets(pretrained, image_size, n_train=2000, n_val=200, seed=42):
     """
     Function to prepare the Datasets.
     :param pretrained: Boolean, True or False.
-    Returns the training and validation datasets along
-    with the class names.
+    Returns the training, validation, and test sets for the openset dataset.
     """
 
-    # TODO: determine whether I want to use the entire training set for embeddings as it is now
-    # TODO: determine whether I want to use training augmentations on the embeddings as it is now
-    closed_set_dataset = CustomImageDataset(
-        label_file_path=METADATA_DIR / "FungiCLEF2023_train_metadata_PRODUCTION.csv",
-        img_dir=DATA_DIR / "DF20",
-        transform=(get_train_transform(image_size, pretrained))
-    )
-    closed_set_dataset.target = np.ones_like(closed_set_dataset.target)
-    openset_dataset = CustomImageDataset(
+    # TODO: revisit the idea of training transformations for the open set discriminator training
+
+    # set up the dataset twice but with different transformations
+    train_dataset = CustomImageDataset(
         label_file_path=METADATA_DIR / "FungiCLEF2023_val_metadata_PRODUCTION.csv",
         img_dir=DATA_DIR / "DF21",
         keep_only={-1},
         transform=(get_train_transform(image_size, pretrained))
     )
-    openset_dataset.target = np.ones_like(openset_dataset.target)
-    return closed_set_dataset, openset_dataset
+    val_test_dataset = CustomImageDataset(
+        label_file_path=METADATA_DIR / "FungiCLEF2023_val_metadata_PRODUCTION.csv",
+        img_dir=DATA_DIR / "DF21",
+        keep_only={-1},
+        transform=(get_valid_transform(image_size, pretrained))  # this is the difference
+    )
+
+    indices = list(range(train_dataset.target.shape[0]))
+    test_indices, train_indices = train_test_split(indices, test_size=n_train, random_state=seed)
+    test_indices, val_indices = train_test_split(test_indices, test_size=n_val, random_state=seed)
+
+    train_dataset = Subset(train_dataset, indices=train_indices)
+    val_dataset = Subset(val_test_dataset, indices=val_indices)
+    test_dataset = Subset(val_test_dataset, indices=test_indices)
+
+    return train_dataset, val_dataset, test_dataset
+
+
+def get_closedset_test_dataset(pretrained, image_size):
+    """
+    Function to prepare the Datasets.
+    :param pretrained: Boolean, True or False.
+    Returns the training, validation, and test sets for the openset dataset.
+    """
+
+    # drop the unknown label
+    val_test_dataset = CustomImageDataset(
+        label_file_path=METADATA_DIR / "FungiCLEF2023_val_metadata_PRODUCTION.csv",
+        img_dir=DATA_DIR / "DF21",
+        exclude={-1},
+        transform=(get_valid_transform(image_size, pretrained))
+    )
+
+    return val_test_dataset

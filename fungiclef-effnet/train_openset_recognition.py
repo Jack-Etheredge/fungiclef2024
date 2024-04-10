@@ -23,17 +23,24 @@ import copy
 import sys
 from pathlib import Path
 
+import h5py
 import numpy as np
 
 import torch
 from torch.utils.data import Dataset, DataLoader, ConcatDataset
 import torch.nn as nn
 import torch.optim as optim
-import torchvision.utils as vutils
+import hydra
+from omegaconf import DictConfig, OmegaConf
 
 import warnings  # ignore warnings
 
-from opengan.utils import save_loss_plots, set_seed, build_models
+from utils import set_seed, build_models, save_discriminator_loss_plot
+from paths import EMBEDDINGS_DIR
+
+
+# os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
+# os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 
 
 class FeatDataset(Dataset):
@@ -55,18 +62,19 @@ class FeatDataset(Dataset):
         return curdata, self.label
 
 
-def get_cached_data(np_path):
+def get_cached_data(h5_path):
     """
-    load cached set of features from a numpy file
+    load cached set of features from an h5py .h5 file to numpy then torch
     """
-    cached_data = np.load(np_path)
+    with h5py.File(h5_path, "r") as hf:
+        cached_data = hf["data"][:]
     whole_feat_vec = torch.from_numpy(cached_data)
     # whole_feat_vec.unsqueeze_(-1).unsqueeze_(-1)  # not needed since using MLP instead of CNN
     print(whole_feat_vec.shape)
     return whole_feat_vec
 
 
-def save_model_state(generator, discriminator, epoch, save_dir, save_generator=False):
+def save_model_state(discriminator, epoch, save_dir):
     """
     save a checkpoint of the model weights
     """
@@ -75,18 +83,13 @@ def save_model_state(generator, discriminator, epoch, save_dir, save_generator=F
     path_to_save_model_state = os.path.join(save_dir, f'epoch-{epoch + 1}-discriminator.pth')
     torch.save(cur_model_wts, path_to_save_model_state)
 
-    if save_generator:
-        cur_model_wts = copy.deepcopy(generator.state_dict())
-        path_to_save_model_state = os.path.join(save_dir, f'epoch-{epoch + 1}-generator.pth')
-        torch.save(cur_model_wts, path_to_save_model_state)
 
-
-def train(discriminator, data, criterion, optimizerD, device):
+def train(discriminator, data, criterion, optimizer, device):
     ############################
     # (1) Update D network: maximize log(D(x)) + log(1 - D(G(z)))
     ###########################
     ## Train with all-real batch
-    optimizerD.zero_grad()
+    optimizer.zero_grad()
     # Format batch
     embeddings, labels = data
     real_cpu = embeddings.to(device)
@@ -97,24 +100,28 @@ def train(discriminator, data, criterion, optimizerD, device):
     dis_loss_real.backward()
     D_x = output.mean().item()
     dis_loss = dis_loss_real
-    optimizerD.step()  # Update D
+    optimizer.step()  # Update D
     return dis_loss, D_x
 
 
-def main():
-    # HYPERPARAMETERS
-    # TODO: move common elements to config
-    FEAT_DIR = Path('__file__').parent.absolute() / "feats"
-    FEAT_DIR.mkdir(parents=True, exist_ok=True)
-    openset_embedding_output_path = FEAT_DIR / "resnet18imagenet1k_cifar10_embeddings.npy"
-    closedset_embedding_output_path = FEAT_DIR / "resnet18imagenet1k_imagenet1k_embeddings.npy"
-    exp_dir = "./opengan_exp"  # experiment directory, used for reading the init model
-    project_name = "opengan_fea_Res18sc_mlpGAN_dlr_1e-6_open1closed0_100_examples_no_gen"  # we save all the checkpoints in this directory
+@hydra.main(version_base=None, config_path="conf", config_name="config")
+def main(cfg: DictConfig) -> None:
+    print(OmegaConf.to_yaml(cfg))
+    embedder_experiment_id = cfg["open-set-recognition"]["embedder_experiment_id"]
+    openset_embeddings_name = cfg["open-set-recognition"]["openset_embeddings_name"]
+    closedset_embeddings_name = cfg["open-set-recognition"]["closedset_embeddings_name"]
+    embedding_size = cfg["open-set-recognition"]["embedding_size"]  # Number of channels in the embedding
+    openset_embedding_output_path = EMBEDDINGS_DIR / openset_embeddings_name
+    closedset_embedding_output_path = EMBEDDINGS_DIR / closedset_embeddings_name
+
+    # TODO: move these params to hydra
+    exp_dir = Path(
+        '__file__').parent.absolute() / "openset_recognition_discriminators"  # experiment directory, used for reading the init model
+    project_name = f"{embedder_experiment_id}_dlr_1e-6_open1closed0_no_gen"  # we save all the checkpoints in this directory
     SEED = 999
     lr_d = 1e-6  # learning rate discriminator
-    num_epochs = 25  # total number of epoch in training
+    num_epochs = 100  # total number of epoch in training
     batch_size = 128
-    nc = 512  # Number of channels in the embedding
     nz = 100  # Size of z latent vector (i.e. size of generator input)
     hidden_dim_g = 64  # Size of feature maps in generator
     hidden_dim_d = 64  # Size of feature maps in discriminator
@@ -135,21 +142,13 @@ def main():
         os.makedirs(save_dir)
 
     # set device, which gpu to use.
-    device = ('cuda' if torch.cuda.is_available() else 'cpu')
+    device = ('cuda:0' if torch.cuda.is_available() else 'cpu')
     print(f"using device {device}")
 
     torch.cuda.device_count()
     torch.cuda.empty_cache()
 
-    generator, discriminator = build_models(nz, hidden_dim_g, nc, hidden_dim_d, device, n_gpu)
-
-    noise = torch.randn(batch_size, nz, device=device)
-    fake = generator(noise)  # Generate fake image batch with G
-    predLabel = discriminator(fake)
-    print("sanity checks:")
-    print("noise shape:", noise.shape)
-    print("fake embedding from generator shape:", fake.shape)
-    print("label from discriminator shape:", predLabel.shape)
+    _, discriminator = build_models(nz, hidden_dim_g, embedding_size, hidden_dim_d, device, n_gpu)
 
     print("making closedset dataset")
     closedset_embeddings = get_cached_data(closedset_embedding_output_path)
@@ -181,16 +180,10 @@ def main():
     # Initialize BCELoss function
     criterion = nn.BCELoss()
 
-    # Create batch of latent vectors that we will use to visualize the progression of the generator
-    fixed_noise = torch.randn(batch_size, nz, device=device)
-
     # Setup Adam optimizers for both G and D
     optimizerD = optim.Adam(discriminator.parameters(), lr=lr_d)
 
-    img_list = []
-    gen_losses = []
     dis_losses = []
-    iters = 0
     print("Starting Training Loop...")
     for epoch in range(num_epochs):
         for i, data in enumerate(dataloader):
@@ -205,17 +198,8 @@ def main():
             # Save Losses for plotting later
             dis_losses.append(dis_loss.item())
 
-            # Check how the generator is doing by saving G's output on fixed_noise
-            if (iters % 500 == 0) or ((epoch == num_epochs - 1) and (i == len(dataloader) - 1)):
-                with torch.no_grad():
-                    fake = generator(fixed_noise).detach().cpu()
-                img_list.append(vutils.make_grid(fake, padding=2, normalize=True))
-                # TODO: figure out what to do with this unused img_list
-
-            iters += 1
-
-        save_model_state(generator, discriminator, epoch, save_dir)
-        save_loss_plots(gen_losses, dis_losses, project_name)
+        save_model_state(discriminator, epoch, save_dir)
+        save_discriminator_loss_plot(dis_losses, project_name)
 
 
 if __name__ == "__main__":

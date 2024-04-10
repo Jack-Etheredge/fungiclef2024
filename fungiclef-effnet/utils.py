@@ -13,7 +13,7 @@ import matplotlib
 from torch import nn as nn
 from torch.utils.data import Dataset, Subset
 
-from models import Generator, Discriminator
+from openset_recognition_models import Generator, Discriminator
 
 matplotlib.style.use('ggplot')
 OUTPUT_DIR = Path('__file__').parent.absolute() / "outputs"
@@ -154,6 +154,18 @@ def save_loss_plots(generator_losses, discriminator_losses, model_name):
     plt.figure(figsize=(10, 5))
     plt.title("Generator and Discriminator Loss During Training")
     plt.plot(generator_losses, label="Gen")
+    plt.plot(discriminator_losses, label="Dis")
+    plt.xlabel("iterations")
+    plt.ylabel("Loss")
+    plt.legend()
+    plt.savefig(f'learningCurves_{model_name}.png', bbox_inches='tight', transparent=True)
+    # plt.show()
+
+
+def save_discriminator_loss_plot(discriminator_losses, model_name):
+    # ## drawing the error curves
+    plt.figure(figsize=(10, 5))
+    plt.title("Generator and Discriminator Loss During Training")
     plt.plot(discriminator_losses, label="Dis")
     plt.xlabel("iterations")
     plt.ylabel("Loss")

@@ -14,7 +14,7 @@ from torch_lr_finder import LRFinder
 import time
 from tqdm.auto import tqdm
 
-from model import build_model, unfreeze_model
+from closedset_model import build_model, unfreeze_model
 from datasets import get_datasets, get_data_loaders
 from utils import save_model, save_plots, checkpoint_model
 from losses import SeesawLoss

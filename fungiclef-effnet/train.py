@@ -17,14 +17,12 @@ from tqdm.auto import tqdm
 import hydra
 from omegaconf import DictConfig, OmegaConf
 
-from model import build_model, unfreeze_model
+from paths import CHECKPOINT_DIR
+from closedset_model import build_model, unfreeze_model
 from datasets import get_datasets, get_data_loaders
 from evaluate import evaluate_experiment
 from utils import save_plots, checkpoint_model
 from losses import SeesawLoss, SupConLoss
-
-CHECKPOINT_DIR = Path('__file__').parent.absolute() / "model_checkpoints"
-CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def add_weight_decay(model, weight_decay=1e-5, skip_list=()):
@@ -189,7 +187,7 @@ def train_model(cfg: DictConfig) -> None:
     print(f"[INFO]: Number of training images: {len(dataset_train)}")
     print(f"[INFO]: Number of validation images: {len(dataset_valid)}")
     print(f"[INFO]: Class names: {dataset_classes}\n")
-    device = ('cuda' if torch.cuda.is_available() else 'cpu')
+    device = ('cuda:0' if torch.cuda.is_available() else 'cpu')
     print(f"Computation device: {device}")
     # Load the training and validation data loaders.
     train_loader, valid_loader = get_data_loaders(dataset_train, dataset_valid, batch_size, num_dataloader_workers,
