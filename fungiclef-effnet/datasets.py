@@ -23,6 +23,8 @@ from torchvision.transforms.v2 import InterpolationMode
 
 Image.MAX_IMAGE_PIXELS = None
 WORKER_TIMEOUT_SECS = 120
+DATA_DIR = Path('__file__').parent.absolute().parent / 'data'
+METADATA_DIR = Path('__file__').parent.absolute().parent / 'metadata'
 
 
 # Training transforms
@@ -114,11 +116,9 @@ def get_datasets(pretrained, image_size, validation_frac, oversample=False, unde
     with the class names.
     """
 
-    data_dir = Path('__file__').parent.absolute().parent / 'data'
-    metadata_dir = Path('__file__').parent.absolute().parent / 'metadata'
     dataset = CustomImageDataset(
-        label_file_path=metadata_dir / "FungiCLEF2023_train_metadata_PRODUCTION.csv",
-        img_dir=data_dir / "DF20",
+        label_file_path=METADATA_DIR / "FungiCLEF2023_train_metadata_PRODUCTION.csv",
+        img_dir=DATA_DIR / "DF20",
         transform=(get_train_transform(image_size, pretrained))
     )
     targets = dataset.target
@@ -158,10 +158,15 @@ def get_datasets(pretrained, image_size, validation_frac, oversample=False, unde
 
 
 class CustomImageDataset(Dataset):
-    def __init__(self, label_file_path: str, img_dir: str, transform=None, target_transform=None):
+    def __init__(self, label_file_path: str, img_dir: str,
+                 keep_only: set | None = None, transform=None,
+                 target_transform=None):
         self.img_labels = pd.read_csv(label_file_path, dtype={"class_id": "int64"})
         self.img_labels = self.img_labels[["image_path", "class_id"]]
         self.img_dir = img_dir
+        self.keep_only = keep_only
+        if self.keep_only is not None:
+            self.img_labels = self.img_labels[self.img_labels["class_id"].isin(keep_only)]
         self.transform = transform
         self.target_transform = target_transform
         self.classes = self.img_labels["class_id"].unique()
@@ -248,3 +253,31 @@ def get_data_loaders(train_dataset, val_dataset, batch_size, num_workers, balanc
         collate_fn=collate_fn,
     )
     return train_loader, valid_loader
+
+
+def get_openset_recognition_datasets(pretrained, image_size, validation_frac,
+                                     oversample=False, undersample=False,
+                                     oversample_prop=0.1, equal_undersampled_val=True, seed=42):
+    """
+    Function to prepare the Datasets.
+    :param pretrained: Boolean, True or False.
+    Returns the training and validation datasets along
+    with the class names.
+    """
+
+    # TODO: determine whether I want to use the entire training set for embeddings as it is now
+    # TODO: determine whether I want to use training augmentations on the embeddings as it is now
+    closed_set_dataset = CustomImageDataset(
+        label_file_path=METADATA_DIR / "FungiCLEF2023_train_metadata_PRODUCTION.csv",
+        img_dir=DATA_DIR / "DF20",
+        transform=(get_train_transform(image_size, pretrained))
+    )
+    closed_set_dataset.target = np.ones_like(closed_set_dataset.target)
+    openset_dataset = CustomImageDataset(
+        label_file_path=METADATA_DIR / "FungiCLEF2023_val_metadata_PRODUCTION.csv",
+        img_dir=DATA_DIR / "DF21",
+        keep_only={-1},
+        transform=(get_train_transform(image_size, pretrained))
+    )
+    openset_dataset.target = np.ones_like(openset_dataset.target)
+    return closed_set_dataset, openset_dataset

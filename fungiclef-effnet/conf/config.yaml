@@ -21,3 +21,13 @@ train:
   fine_tune_after_n_epochs: 4
   skip_frozen_epochs_load_failed_model: False
   notes: model is efficientnet_b0 with imagenet weights and autoaug augmentations
+open-set-recognition:
+  embedder_experiment_id: null
+  embedder_layer_offset: -2
+  dlr: 1e-5
+  glr: 1e-5
+  batch_size: 128
+  n_workers: 16
+  openset_embeddings_name: null  # TODO: derive this from embedder_experiment_id
+  closedset_embeddings_name: null  # TODO: derive this from embedder_experiment_id
+  image_size: 224
