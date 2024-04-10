@@ -35,8 +35,8 @@ def main(cfg: DictConfig) -> None:
     eval_fraction = 0.1
     max_total_examples = 10_000  # TODO: reincorporate this
     embedder_experiment_id = cfg["open-set-recognition"]["embedder_experiment_id"]
-    openset_label = 1.
-    closedset_label = 0.
+    openset_label = 0.
+    closedset_label = 1.
     project_name = f"{embedder_experiment_id}_dlr_1e-6_glr_1e-6_open{int(openset_label)}closed{int(closedset_label)}"  # we save all the checkpoints in this directory
     exp_dir = Path(
         '__file__').parent.absolute() / "openset_recognition_discriminators"  # experiment directory, used for reading the init model
@@ -208,5 +208,7 @@ if __name__ == "__main__":
     #   selection roc-auc 0.6117849906483791 and evaluation roc-auc 0.5604385963920865
     # GAN open 1 closed 0:
     # best discriminator: seesaw_04_02_2024_dlr_1e-6_open1closed0/epoch-10-discriminator.pth
-    #   selection roc-auc 0.6020331982543641
-    #
+    #   selection roc-auc 0.6020331982543641 and evaluation roc-auc 0.5775920077303734
+    # GAN open 0 closed 1:
+    # best discriminator: seesaw_04_02_2024_dlr_1e-6_glr_1e-6_open0closed1/epoch-20-discriminator.pth
+    #   selection roc-auc 0.6231694201995013 and evaluation roc-auc 0.6029468184269686

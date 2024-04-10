@@ -4,7 +4,7 @@ import pandas as pd
 import numpy as np
 import os
 
-from sklearn.metrics import accuracy_score, balanced_accuracy_score, f1_score
+from sklearn.metrics import accuracy_score, balanced_accuracy_score, f1_score, roc_auc_score
 from tqdm import tqdm
 import torchvision.models as models
 import torch.nn as nn
@@ -46,6 +46,7 @@ class PytorchWorker:
             v2.Compose([v2.ToImage(), v2.ToDtype(torch.float32, scale=True)]),
             v2.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         ])
+        # TODO: pull this transformation from the datasets module
 
     def _load_model(self, model_path):
         print("Setting up Pytorch Model")
@@ -191,6 +192,9 @@ def evaluate_experiment(experiment_id):
     f1_macro_known_vs_unknown = f1_score(y_true_known_vs_unknown, y_pred_known_vs_unknown, average='macro')
     homebrewed_scores['f1_macro_known_vs_unknown'] = f1_macro_known_vs_unknown
     print("F1 macro known vs unknown:", f1_macro_known_vs_unknown)
+    roc_auc_known_vs_unknown = roc_auc_score(y_true_known_vs_unknown, y_pred_known_vs_unknown)
+    homebrewed_scores['roc_auc_known_vs_unknown'] = roc_auc_known_vs_unknown
+    print("roc_auc_known_vs_unknown:", roc_auc_known_vs_unknown)
 
     # make and save the unknown output csv
     submission_df.loc[:, "class_id"] = y_pred
@@ -208,6 +212,6 @@ def evaluate_experiment(experiment_id):
 
 
 if __name__ == "__main__":
-    experiment_id = "2024-04-06 10:26:26.362953"
+    experiment_id = "seesaw_04_02_2024"
     print(f"evaluating experiment {experiment_id}")
     evaluate_experiment(experiment_id=experiment_id)
