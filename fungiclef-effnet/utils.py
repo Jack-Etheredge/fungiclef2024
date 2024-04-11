@@ -5,13 +5,11 @@ modified from https://debuggercafe.com/transfer-learning-using-efficientnet-pyto
 import random
 from pathlib import Path
 
-import numpy as np
 import torch
-from PIL import Image
 from matplotlib import pyplot as plt
 import matplotlib
 from torch import nn as nn
-from torch.utils.data import Dataset, Subset
+from torch.utils.data import Subset
 
 from openset_recognition_models import Generator, Discriminator
 
@@ -89,43 +87,6 @@ def save_plots(train_acc, valid_acc, train_loss, valid_loss, pretrained, accurac
     plt.ylabel('Loss')
     plt.legend()
     plt.savefig(loss_plot_path)
-
-
-class CustomImageDataset(Dataset):
-    def __init__(self, img_dir: str, transform=None, target_transform=None):
-        valid_extensions = {".jpg", ".jpeg", ".png"}
-        self.img_dir = img_dir
-        self.transform = transform
-        self.target_transform = target_transform
-        self.classes = np.array([1.])
-        self.img_paths = [img for img in Path(img_dir).iterdir() if img.suffix.lower() in valid_extensions]
-        self.n_img = len(self.img_paths)
-        self.target = np.array([1.] * self.n_img)
-
-    def __len__(self):
-        return self.n_img
-
-    def __getitem__(self, idx):
-        """If an image can't be read, print the error and return None"""
-        try:
-            img_path = self.img_paths[idx]
-            image = Image.open(img_path).convert('RGB')  # hopefully this handles greyscale cases
-            label = 1.
-            if self.transform:
-                image = self.transform(image)
-            if self.target_transform:
-                label = self.target_transform(label)
-        except Exception as e:
-            print("issue loading image")
-            print(e)
-            return None
-        return image, label
-
-
-def collate_fn(batch):
-    """Filter None from the batch"""
-    batch = list(filter(lambda x: x is not None, batch))
-    return torch.utils.data.dataloader.default_collate(batch)
 
 
 def get_train_val_datasets(dataset, max_total_examples=1000, val_frac=0.1):

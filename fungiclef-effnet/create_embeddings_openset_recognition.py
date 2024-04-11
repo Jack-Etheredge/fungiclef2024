@@ -10,9 +10,8 @@ import hydra
 from omegaconf import DictConfig, OmegaConf
 
 from paths import CHECKPOINT_DIR, EMBEDDINGS_DIR
-from datasets import get_openset_datasets, get_datasets
+from datasets import collate_fn, get_openset_datasets, get_datasets
 from closedset_model import build_model
-from utils import collate_fn
 
 
 @hydra.main(version_base=None, config_path="conf", config_name="config")

@@ -18,9 +18,8 @@ from paths import CHECKPOINT_DIR
 from tqdm import tqdm
 
 from closedset_model import build_model
-from datasets import get_openset_datasets, get_datasets, get_closedset_test_dataset
+from datasets import get_openset_datasets, get_datasets, get_closedset_test_dataset, collate_fn
 from openset_recognition_models import Discriminator
-from utils import CustomImageDataset, collate_fn, get_train_val_datasets
 
 
 # os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
@@ -212,3 +211,5 @@ if __name__ == "__main__":
     # GAN open 0 closed 1:
     # best discriminator: seesaw_04_02_2024_dlr_1e-6_glr_1e-6_open0closed1/epoch-20-discriminator.pth
     #   selection roc-auc 0.6231694201995013 and evaluation roc-auc 0.6029468184269686
+    # softmax thresholding (overly optimistic; set threshold on the test set): roc-auc 0.5447452440605403
+    # temp scaled softmax thresholding (overly optimistic; set threshold on the test set): roc-auc 0.544770863626587
