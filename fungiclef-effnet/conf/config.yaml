@@ -23,6 +23,7 @@ train:
   skip_frozen_epochs_load_failed_model: False
   notes: model is efficientnet_b0 with imagenet weights and autoaug augmentations
   n_classes: 1604
+  worker_timeout_s: 120
 open-set-recognition:
   embedder_experiment_id: "seesaw_04_02_2024"
   embedder_layer_offset: -1
@@ -38,3 +39,5 @@ open-set-recognition:
   openset_n_val: 200
   closedset_n_train: 50000
   embedding_size: 1280
+temp-scaling:
+  experiment_id: "seesaw_04_02_2024"

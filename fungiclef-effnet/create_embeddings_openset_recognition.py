@@ -58,7 +58,7 @@ def main(cfg: DictConfig) -> None:
     checkpoint = torch.load(model_file_path)
     model.load_state_dict(checkpoint['model_state_dict'])
     model.eval()
-    feature_extractor = torch.nn.Sequential(*list(model.children())[:-1])
+    feature_extractor = torch.nn.Sequential(*list(model.children())[:embedder_layer_offset])
 
     # transforms = v2.Compose([
     #     v2.Resize((image_size, image_size), interpolation=InterpolationMode.BILINEAR, antialias=True),

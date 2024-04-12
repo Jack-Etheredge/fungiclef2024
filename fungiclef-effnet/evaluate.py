@@ -73,6 +73,7 @@ class PytorchWorker:
 
 def make_submission(test_metadata, model_path, output_csv_path, images_root_path):
     """Make submission with given """
+    # TODO: use the dataloader with a larger batch size to speed up inference
 
     model = PytorchWorker(model_path)
 
