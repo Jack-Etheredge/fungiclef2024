@@ -211,7 +211,7 @@ def train_model(cfg: DictConfig) -> None:
     optimizer = optim.AdamW(parameters, lr=lr)
 
     if lr_scheduler == "reducelronplateau":
-        scheduler = ReduceLROnPlateau(optimizer, 'min', patience=lr_scheduler_patience)
+        scheduler = ReduceLROnPlateau(optimizer, 'min', patience=lr_scheduler_patience, verbose=True)
     else:
         scheduler = None
         print(f"not using lr scheduler, config set to {lr_scheduler}")
