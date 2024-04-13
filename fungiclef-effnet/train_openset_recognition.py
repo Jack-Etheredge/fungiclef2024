@@ -37,6 +37,7 @@ import warnings  # ignore warnings
 
 from utils import set_seed, build_models, save_discriminator_loss_plot
 from paths import EMBEDDINGS_DIR
+from datasets import get_dataloader_combine_and_balance_datasets
 
 
 # os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
@@ -161,21 +162,7 @@ def main(cfg: DictConfig) -> None:
     openset_dataset = FeatDataset(data=openset_embeddings, label=openset_label)
 
     print("combining dataloaders and balancing classes")
-    dataset = ConcatDataset([openset_dataset, closedset_dataset])
-    target = np.array(openset_dataset.target + closedset_dataset.target)
-    # https://pytorch.org/docs/stable/data.html
-    # https://discuss.pytorch.org/t/how-to-handle-imbalanced-classes/11264
-    class_sample_count = np.array([len(np.where(target == t)[0]) for t in np.unique(target)])
-    weight_per_class = 1. / class_sample_count
-    weight_per_sample = np.array([weight_per_class[class_idx] for class_idx in target])
-    weight_per_sample = torch.from_numpy(weight_per_sample)
-    weight_per_sample = weight_per_sample.double()
-    sampler = torch.utils.data.sampler.WeightedRandomSampler(weight_per_sample, len(weight_per_sample))
-    dataloader = DataLoader(dataset, batch_size=batch_size, sampler=sampler,
-                            num_workers=16,
-                            timeout=120,
-                            persistent_workers=True,
-                            )
+    dataloader = get_dataloader_combine_and_balance_datasets(openset_dataset, closedset_dataset)
 
     # Initialize BCELoss function
     criterion = nn.BCELoss()

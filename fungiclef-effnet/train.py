@@ -11,6 +11,7 @@ from focal_loss.focal_loss import FocalLoss
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch_lr_finder import LRFinder
 import time
 from tqdm.auto import tqdm
@@ -96,12 +97,12 @@ def train(model, trainloader, optimizer, criterion, loss_function_id, max_norm, 
     # Loss and accuracy for the complete epoch.
     epoch_loss = train_running_loss / i + 1
     epoch_acc = 100. * (train_running_correct / len(trainloader.dataset))
-    return epoch_loss, epoch_acc
+    return epoch_loss.cpu().numpy(), epoch_acc
 
 
 # Validation function.
 @torch.no_grad()
-def validate(model, testloader, criterion, loss_function_id, device='cpu'):
+def validate(model, testloader, criterion, loss_function_id, device='cpu', scheduler=None):
     model.eval()
     print(f'Validation with device {device}')
     valid_running_loss = 0.0
@@ -125,8 +126,10 @@ def validate(model, testloader, criterion, loss_function_id, device='cpu'):
 
     # Loss and accuracy for the complete epoch.
     epoch_loss = valid_running_loss / i + 1
+    if scheduler:
+        scheduler.step(epoch_loss)
     epoch_acc = 100. * (valid_running_correct / len(testloader.dataset))
-    return epoch_loss, epoch_acc
+    return epoch_loss.cpu().numpy(), epoch_acc
 
 
 @hydra.main(version_base=None, config_path="conf", config_name="config")
@@ -152,6 +155,8 @@ def train_model(cfg: DictConfig) -> None:
     use_lr_finder = cfg["train"]["use_lr_finder"]
     fine_tune_after_n_epochs = cfg["train"]["fine_tune_after_n_epochs"]
     skip_frozen_epochs_load_failed_model = cfg["train"]["skip_frozen_epochs_load_failed_model"]
+    lr_scheduler = cfg["train"]["lr_scheduler"]
+    lr_scheduler_patience = cfg["train"]["lr_scheduler_patience"]
 
     for k, v in cfg["train"].items():
         if v == "None" or v == "null":
@@ -204,6 +209,12 @@ def train_model(cfg: DictConfig) -> None:
     # optimizer = optim.Adam(model.parameters(), lr=lr)
     parameters = add_weight_decay(model, weight_decay=weight_decay)
     optimizer = optim.AdamW(parameters, lr=lr)
+
+    if lr_scheduler == "reducelronplateau":
+        scheduler = ReduceLROnPlateau(optimizer, 'min', patience=lr_scheduler_patience)
+    else:
+        scheduler = None
+        print(f"not using lr scheduler, config set to {lr_scheduler}")
 
     # TODO: refine/replace this logic
     resume_from_checkpoint = model_file_path if Path(model_file_path).exists() else None
@@ -285,7 +296,7 @@ def train_model(cfg: DictConfig) -> None:
         while recreate_loader:
             try:
                 valid_epoch_loss, valid_epoch_acc = validate(model, valid_loader,
-                                                             criterion, loss_function, device)
+                                                             criterion, loss_function, device, scheduler)
                 recreate_loader = False
             except Exception as e:
                 print("issue with validation")

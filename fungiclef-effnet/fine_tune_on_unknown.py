@@ -9,7 +9,6 @@ https://debuggercafe.com/transfer-learning-using-efficientnet-pytorch/
 https://machinelearningmastery.com/managing-a-pytorch-training-process-with-checkpoints-and-early-stopping/
 """
 import json
-from datetime import datetime
 from pathlib import Path
 
 from focal_loss.focal_loss import FocalLoss
@@ -17,6 +16,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.nn.functional import log_softmax
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch_lr_finder import LRFinder
 import time
 from tqdm.auto import tqdm
@@ -24,8 +24,8 @@ import hydra
 from omegaconf import DictConfig, OmegaConf
 
 from paths import CHECKPOINT_DIR
-from closedset_model import build_model, unfreeze_model
-from datasets import get_datasets, get_data_loaders, get_openset_datasets, collate_fn
+from closedset_model import build_model
+from datasets import get_datasets, get_openset_datasets, get_dataloader_combine_and_balance_datasets
 from evaluate import evaluate_experiment
 from utils import save_plots, checkpoint_model
 from losses import SeesawLoss, SupConLoss
@@ -84,13 +84,13 @@ def train(model, data_loader, optimizer, criterion, open_criterion, loss_functio
         optimizer.zero_grad()
         # Forward pass.
         outputs = model(image)
-        open_outputs, closed_outputs, _, closed_labels, n_open, n_closed = split_open_closed(labels, outputs)
+        open_outputs, closed_outputs, _, closed_labels, n_open, n_closed = split_open_closed(outputs, labels)
         # Calculate the loss.
         if n_open > 0:
             if loss_function_id == "focal":
-                loss = criterion(m(outputs), closed_labels)
+                loss = criterion(m(closed_outputs), closed_labels)
             else:
-                loss = criterion(outputs, closed_labels)
+                loss = criterion(closed_outputs, closed_labels)
         else:
             loss = torch.tensor(0.)
         if n_closed > 0:
@@ -102,7 +102,7 @@ def train(model, data_loader, optimizer, criterion, open_criterion, loss_functio
         running_loss += total_loss
 
         # Calculate the accuracy.
-        _, preds = torch.max(outputs.data, 1)
+        _, preds = torch.max(closed_outputs.data, 1)
         running_correct += (preds == closed_labels).sum().item()
         # Backpropagation
         loss.backward()
@@ -114,12 +114,12 @@ def train(model, data_loader, optimizer, criterion, open_criterion, loss_functio
     # Loss and accuracy for the complete epoch.
     epoch_loss = running_loss / i + 1
     epoch_acc = 100. * (running_correct / len(data_loader.dataset))
-    return epoch_loss, epoch_acc
+    return epoch_loss.cpu().numpy(), epoch_acc
 
 
 # Validation function.
 @torch.no_grad()
-def validate(model, data_loader, criterion, open_criterion, loss_function_id, device='cpu'):
+def validate(model, data_loader, criterion, open_criterion, loss_function_id, device='cpu', scheduler=None):
     model.eval()
     print(f'Validation with device {device}')
     running_loss = 0.0
@@ -132,13 +132,13 @@ def validate(model, data_loader, criterion, open_criterion, loss_function_id, de
 
         # Forward pass.
         outputs = model(image)
-        open_outputs, closed_outputs, _, closed_labels, n_open, n_closed = split_open_closed(labels, outputs)
+        open_outputs, closed_outputs, _, closed_labels, n_open, n_closed = split_open_closed(outputs, labels)
         # Calculate the loss.
         if n_open > 0:
             if loss_function_id == "focal":
-                loss = criterion(m(outputs), closed_labels)
+                loss = criterion(m(closed_outputs), closed_labels)
             else:
-                loss = criterion(outputs, closed_labels)
+                loss = criterion(closed_outputs, closed_labels)
         else:
             loss = torch.tensor(0.)
         if n_closed > 0:
@@ -149,13 +149,15 @@ def validate(model, data_loader, criterion, open_criterion, loss_function_id, de
         total_loss = loss.item() * n_closed + open_loss.item() * n_open
         running_loss += total_loss
         # Calculate the accuracy.
-        _, preds = torch.max(outputs.data, 1)
+        _, preds = torch.max(closed_outputs.data, 1)
         running_correct += (preds == closed_labels).sum().item()
 
     # Loss and accuracy for the complete epoch.
     epoch_loss = running_loss / i + 1
+    if scheduler:
+        scheduler.step(epoch_loss)
     epoch_acc = 100. * (running_correct / len(data_loader.dataset))
-    return epoch_loss, epoch_acc
+    return epoch_loss.cpu().numpy(), epoch_acc
 
 
 def split_open_closed(outputs, labels):
@@ -176,13 +178,15 @@ def split_open_closed(outputs, labels):
 @hydra.main(version_base=None, config_path="conf", config_name="config")
 def train_model(cfg: DictConfig) -> None:
     print(OmegaConf.to_yaml(cfg))
-    epochs = cfg["train"]["epochs"]
-    lr = cfg["train"]["lr"]
-    pretrained = cfg["train"]["pretrained"]
-    early_stop_thresh = cfg["train"]["early_stop_thresh"]
-    loss_function = cfg["train"]["loss_function"]
-    batch_size = cfg["train"]["batch_size"]
-    num_dataloader_workers = cfg["train"]["num_dataloader_workers"]
+    epochs = cfg["unknown-fine-tune"]["epochs"]
+    lr = cfg["unknown-fine-tune"]["lr"]
+    batch_size = cfg["unknown-fine-tune"]["batch_size"]
+    early_stop_thresh = cfg["unknown-fine-tune"]["early_stop_thresh"]
+    loss_function = cfg["unknown-fine-tune"]["loss_function"]
+    use_lr_finder = cfg["unknown-fine-tune"]["use_lr_finder"]
+    lr_scheduler = cfg["unknown-fine-tune"]["lr_scheduler"]
+    lr_scheduler_patience = cfg["unknown-fine-tune"]["lr_scheduler_patience"]
+
     image_resize = cfg["train"]["image_resize"]
     validation_frac = cfg["train"]["validation_frac"]
     max_norm = cfg["train"]["max_norm"]
@@ -193,33 +197,23 @@ def train_model(cfg: DictConfig) -> None:
     dropout_rate = cfg["train"]["dropout_rate"]
     weight_decay = cfg["train"]["weight_decay"]
     balanced_sampler = cfg["train"]["balanced_sampler"]
-    use_lr_finder = cfg["train"]["use_lr_finder"]
-    fine_tune_after_n_epochs = cfg["train"]["fine_tune_after_n_epochs"]
-    skip_frozen_epochs_load_failed_model = cfg["train"]["skip_frozen_epochs_load_failed_model"]
     n_classes = cfg["train"]["n_classes"]
-    worker_timeout_s = cfg["train"]["worker_timeout_s"]
 
-    embedder_experiment_id = cfg["open-set-recognition"]["embedder_experiment_id"]
-    embedder_layer_offset = cfg["open-set-recognition"]["embedder_layer_offset"]
-    batch_size = cfg["open-set-recognition"]["batch_size"]
-    n_workers = cfg["open-set-recognition"]["n_workers"]
-    openset_embeddings_name = cfg["open-set-recognition"]["openset_embeddings_name"]
-    closedset_embeddings_name = cfg["open-set-recognition"]["closedset_embeddings_name"]
     image_size = cfg["open-set-recognition"]["image_size"]
     openset_n_train = cfg["open-set-recognition"]["openset_n_train"]
     openset_n_val = cfg["open-set-recognition"]["openset_n_val"]
-    closedset_n_train = cfg["open-set-recognition"]["closedset_n_train"]
     pretrained = cfg["open-set-recognition"]["pretrained"]
 
     for k, v in cfg["train"].items():
         if v == "None" or v == "null":
             url = "https://stackoverflow.com/questions/76567692/hydra-how-to-express-none-in-config-files"
-            raise ValueError(f"`{k}` set to 'None' or 'null'. Use `null` for None values in hydra; see {url}")
+            raise ValueError(f"'{k}' set to 'None' or 'null'."
+                             f"Use null without quotes for None values in hydra: see {url}")
 
-    experiment_id = cfg["train"]["experiment_id"]
+    experiment_id = cfg["unknown-fine-tune"]["experiment_id"]
     if experiment_id is None:
-        experiment_id = str(datetime.now())
-        cfg["train"]["experiment_id"] = experiment_id
+        raise ValueError(("fine tuning requires a trained model; "
+                          "specify an experiment_id model directory with a valid model.pth checkpoint"))
 
     if balanced_sampler and (oversample or undersample):
         raise ValueError("cannot use balanced sampler with oversample or undersample")
@@ -228,35 +222,44 @@ def train_model(cfg: DictConfig) -> None:
     experiment_dir = CHECKPOINT_DIR / experiment_id
     experiment_dir.mkdir(parents=True, exist_ok=True)
     model_file_path = str(experiment_dir / f"model.pth")
-    accuracy_plot_path = str(experiment_dir / "accuracy_plot.png")
-    loss_plot_path = str(experiment_dir / "loss_plot.png")
+    if not Path(model_file_path).exists():
+        raise ValueError(f"Invalid path to model: {model_file_path}")
+    updated_model_file_path = str(experiment_dir / f"model_fine_tuned_unknown.pth")
+    accuracy_plot_path = str(experiment_dir / "unknown_fine_tuning_accuracy_plot.png")
+    loss_plot_path = str(experiment_dir / "unknown_fine_tuning_loss_plot.png")
     config_dict = OmegaConf.to_container(cfg, resolve=True)
-    with open(str(experiment_dir / "experiment_config.json"), "w") as f:
+    with open(str(experiment_dir / "unknown_fine_tuning_experiment_config.json"), "w") as f:
         json.dump(config_dict, f)
 
     torch.autograd.set_detect_anomaly(True)
 
     # Load the training and validation datasets.
-    # TODO: <<pick up where i left off>> continue fleshing this out and then use it for fine tuning
     closed_dataset_train, closed_dataset_val, _ = get_datasets(pretrained, image_resize,
                                                                validation_frac,
                                                                oversample=oversample,
                                                                undersample=undersample,
                                                                oversample_prop=oversample_prop,
                                                                equal_undersampled_val=equal_undersampled_val)
-
-    closed_train_loader, closed_val_loader = get_data_loaders(closed_dataset_train, closed_dataset_val, batch_size,
-                                                              num_dataloader_workers,
-                                                              balanced_sampler=balanced_sampler)
+    # closed_train_loader, closed_val_loader = get_data_loaders(closed_dataset_train, closed_dataset_val, batch_size,
+    #                                                           num_dataloader_workers,
+    #                                                           balanced_sampler=balanced_sampler)
     open_dataset_train, open_dataset_val, _ = get_openset_datasets(pretrained=pretrained, image_size=image_size,
                                                                    n_train=openset_n_train, n_val=openset_n_val)
-    open_train_loader = torch.utils.data.DataLoader(open_dataset_train, batch_size=batch_size,
-                                                    shuffle=False, num_workers=n_workers, collate_fn=collate_fn,
-                                                    timeout=worker_timeout_s)
-    open_val_loader = torch.utils.data.DataLoader(open_dataset_train, batch_size=batch_size,
-                                                  shuffle=False, num_workers=n_workers, collate_fn=collate_fn,
-                                                  timeout=worker_timeout_s)
-    # TODO: combine the datasets into a balanced loader
+    # open_train_loader = torch.utils.data.DataLoader(open_dataset_train, batch_size=batch_size,
+    #                                                 shuffle=False, num_workers=n_workers, collate_fn=collate_fn,
+    #                                                 timeout=worker_timeout_s)
+    # open_val_loader = torch.utils.data.DataLoader(open_dataset_train, batch_size=batch_size,
+    #                                               shuffle=False, num_workers=n_workers, collate_fn=collate_fn,
+    #                                               timeout=worker_timeout_s)
+    # closed_train_loader, closed_val_loader = get_data_loaders(closed_dataset_train, closed_dataset_val, batch_size,
+    #                                                           num_dataloader_workers,
+    #                                                           balanced_sampler=balanced_sampler)
+    print("[[train]] combining dataloaders and balancing classes")
+    train_loader = get_dataloader_combine_and_balance_datasets(closed_dataset_train, open_dataset_train,
+                                                               batch_size=batch_size, unknowns=True)
+    print("[[val]] combining dataloaders and balancing classes")
+    val_loader = get_dataloader_combine_and_balance_datasets(closed_dataset_val, open_dataset_val,
+                                                             batch_size=batch_size, unknowns=True)
 
     print(f"[INFO]: Number of closed set training images: {len(closed_dataset_train)}")
     print(f"[INFO]: Number of closed set validation images: {len(closed_dataset_val)}")
@@ -268,14 +271,19 @@ def train_model(cfg: DictConfig) -> None:
     print(f"Epochs to train for: {epochs}\n")
 
     model = build_model(
-        pretrained=pretrained,
-        fine_tune=not fine_tune_after_n_epochs,
+        pretrained=False,  # model weights will be loaded
+        fine_tune=True,  # we want to fine-tune all the weights
         num_classes=n_classes,
         dropout_rate=dropout_rate,
     ).to(device)
-    # optimizer = optim.Adam(model.parameters(), lr=lr)
     parameters = add_weight_decay(model, weight_decay=weight_decay)
     optimizer = optim.AdamW(parameters, lr=lr)
+
+    if lr_scheduler == "reducelronplateau":
+        scheduler = ReduceLROnPlateau(optimizer, 'min', patience=lr_scheduler_patience)
+    else:
+        scheduler = None
+        print(f"not using lr scheduler, config set to {lr_scheduler}")
 
     # TODO: refine/replace this logic
     resume_from_checkpoint = model_file_path if Path(model_file_path).exists() else None
@@ -291,9 +299,6 @@ def train_model(cfg: DictConfig) -> None:
             optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         except Exception as e:
             print(f"unable to load optimizer state due to {e}")
-        # TODO: use the epoch and loss from the checkpoint
-        start_epoch = checkpoint['epoch']
-        loss = checkpoint['loss']
         model.to(device)
     else:
         print(f"training new model: {experiment_id}")
@@ -329,16 +334,7 @@ def train_model(cfg: DictConfig) -> None:
     best_validation_loss = float("inf")
     best_epoch = 0
     # Start the training.
-    unfrozen = fine_tune_after_n_epochs == 0
     for epoch in range(epochs):
-
-        if (not unfrozen and (skip_frozen_epochs_load_failed_model or
-                              epoch + 1 > fine_tune_after_n_epochs)):
-            model = unfreeze_model(model)
-            print("all layers unfrozen")
-            parameters = add_weight_decay(model, weight_decay=weight_decay)
-            optimizer = optim.AdamW(parameters, lr=lr)
-            unfrozen = True
 
         print(f"[INFO]: Epoch {epoch + 1} of {epochs}")
         recreate_loader = True
@@ -351,24 +347,23 @@ def train_model(cfg: DictConfig) -> None:
             except Exception as e:
                 print("issue with training")
                 print(e)
-                print("recreating data loaders and trying again")
-                train_loader, valid_loader = get_data_loaders(dataset_train, dataset_valid, batch_size,
-                                                              num_dataloader_workers,
-                                                              balanced_sampler=balanced_sampler)
+                print("recreating training data loader and trying again")
+                train_loader = get_dataloader_combine_and_balance_datasets(closed_dataset_train, open_dataset_train,
+                                                                           batch_size=batch_size, unknowns=True)
 
         recreate_loader = True
         while recreate_loader:
             try:
-                valid_epoch_loss, valid_epoch_acc = validate(model, valid_loader,
-                                                             criterion, open_criterion, loss_function, device)
+                valid_epoch_loss, valid_epoch_acc = validate(model, val_loader,
+                                                             criterion, open_criterion, loss_function, device,
+                                                             scheduler)
                 recreate_loader = False
             except Exception as e:
                 print("issue with validation")
                 print(e)
-                print("recreating data loaders and trying again")
-                train_loader, valid_loader = get_data_loaders(dataset_train, dataset_valid, batch_size,
-                                                              num_dataloader_workers,
-                                                              balanced_sampler=balanced_sampler)
+                print("recreating validation data loader and trying again")
+                val_loader = get_dataloader_combine_and_balance_datasets(closed_dataset_val, open_dataset_val,
+                                                                         batch_size=batch_size, unknowns=True)
 
         train_loss.append(train_epoch_loss)
         valid_loss.append(valid_epoch_loss)
@@ -381,7 +376,7 @@ def train_model(cfg: DictConfig) -> None:
             best_validation_loss = valid_epoch_loss
             best_epoch = epoch
             print("updating best model")
-            checkpoint_model(epoch + 1, model, optimizer, criterion, valid_epoch_loss, model_file_path)
+            checkpoint_model(epoch + 1, model, optimizer, criterion, valid_epoch_loss, updated_model_file_path)
             print(">> successfully updated best model <<")
         elif epoch - best_epoch > early_stop_thresh:
             print("Early stopped training at epoch %d" % epoch)

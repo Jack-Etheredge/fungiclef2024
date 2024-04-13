@@ -24,6 +24,8 @@ train:
   notes: model is efficientnet_b0 with imagenet weights and autoaug augmentations
   n_classes: 1604
   worker_timeout_s: 120
+  lr_scheduler: "reducelronplateau"
+  lr_scheduler_patience: 5
 open-set-recognition:
   embedder_experiment_id: "seesaw_04_02_2024"
   embedder_layer_offset: -1
@@ -41,3 +43,13 @@ open-set-recognition:
   embedding_size: 1280
 temp-scaling:
   experiment_id: "seesaw_04_02_2024"
+unknown-fine-tune:
+  experiment_id: "seesaw_04_02_2024"
+  epochs: 200
+  lr: 8e-4
+  batch_size: 128
+  early_stop_thresh: 10
+  loss_function: "seesaw"
+  use_lr_finder: False
+  lr_scheduler: "reducelronplateau"
+  lr_scheduler_patience: 5

@@ -20,7 +20,7 @@ from imblearn.under_sampling import RandomUnderSampler
 from sklearn.model_selection import train_test_split
 from torchvision import transforms
 from torchvision.transforms import v2
-from torch.utils.data import DataLoader, Dataset, Subset
+from torch.utils.data import DataLoader, Dataset, Subset, ConcatDataset
 from torchvision.transforms.v2 import InterpolationMode
 
 # dataset loading issue
@@ -273,6 +273,9 @@ def get_openset_datasets(pretrained, image_size, n_train=2000, n_val=200, seed=4
     train_dataset = Subset(train_dataset, indices=train_indices)
     val_dataset = Subset(val_test_dataset, indices=val_indices)
     test_dataset = Subset(val_test_dataset, indices=test_indices)
+    train_dataset.target = np.array([-1] * len(train_dataset))
+    val_dataset.target = np.array([-1] * len(val_dataset))
+    test_dataset.target = np.array([-1] * len(test_dataset))
 
     return train_dataset, val_dataset, test_dataset
 
@@ -293,3 +296,27 @@ def get_closedset_test_dataset(pretrained, image_size):
     )
 
     return val_test_dataset
+
+
+def get_dataloader_combine_and_balance_datasets(dataset_1, dataset_2, batch_size, num_workers=16, timeout=120,
+                                                persistent_workers=True, unknowns=False):
+    """
+    https://pytorch.org/docs/stable/data.html
+    https://discuss.pytorch.org/t/how-to-handle-imbalanced-classes/11264
+    """
+    dataset = ConcatDataset([dataset_1, dataset_2])
+    target = np.array(list(dataset_1.target) + list(dataset_2.target))
+    target = target + 1 if unknowns else target  # -1 is now 0 to satisfy logic below
+    class_sample_count = np.array([len(np.where(target == t)[0]) for t in np.unique(target)])
+    weight_per_class = 1. / class_sample_count
+    weight_per_class[0] = 0.5 if unknowns else weight_per_class[0]
+    weight_per_sample = np.array([weight_per_class[class_idx] for class_idx in target])
+    weight_per_sample = torch.from_numpy(weight_per_sample)
+    weight_per_sample = weight_per_sample.double()
+    sampler = torch.utils.data.sampler.WeightedRandomSampler(weight_per_sample, len(weight_per_sample))
+    dataloader = DataLoader(dataset, batch_size=batch_size, sampler=sampler,
+                            num_workers=num_workers,
+                            timeout=timeout,
+                            persistent_workers=persistent_workers,
+                            )
+    return dataloader
