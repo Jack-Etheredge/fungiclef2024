@@ -14,6 +14,7 @@ import torch
 from pathlib import Path
 from PIL import ImageFile
 from scipy.special import softmax
+from scipy.stats import entropy
 from competition_metrics import evaluate
 from temperature_scaling import ModelWithTemperature
 
@@ -89,6 +90,7 @@ def make_submission(test_metadata, model_path, output_csv_path, images_root_path
 
     predictions = []
     max_probas = []
+    entropy_scores = []
     image_paths = test_metadata["image_path"]
     with torch.no_grad():
         for image_path in tqdm(image_paths):
@@ -96,9 +98,11 @@ def make_submission(test_metadata, model_path, output_csv_path, images_root_path
                 image_path = os.path.join(images_root_path, image_path)
                 test_image = Image.open(image_path).convert("RGB")
                 logits = model.predict_image(test_image)
-                logits = softmax(logits)
-                predictions.append(np.argmax(logits))
-                max_probas.append(np.max(logits))
+                probas = softmax(logits)
+                entropy_score = entropy(probas.squeeze())
+                predictions.append(np.argmax(probas))
+                max_probas.append(np.max(probas))
+                entropy_scores.append(entropy_score)
             except Exception as e:
                 print(f"issue with image {image_path}: {e}")
                 predictions.append(-1)
@@ -106,10 +110,11 @@ def make_submission(test_metadata, model_path, output_csv_path, images_root_path
 
     test_metadata.loc[:, "class_id"] = predictions
     test_metadata.loc[:, "max_proba"] = max_probas
-    test_metadata[["observation_id", "class_id", "max_proba"]].to_csv(output_csv_path, index=None)
+    test_metadata.loc[:, "entropy"] = entropy_scores
+    test_metadata[["observation_id", "class_id", "max_proba", "entropy"]].to_csv(output_csv_path, index=None)
 
 
-def evaluate_experiment(experiment_id, temperature_scaling=False, fine_tuned_unknown=False):
+def evaluate_experiment(experiment_id, temperature_scaling=False, fine_tuned_unknown=False, from_outputs=False):
     experiment_dir = Path("model_checkpoints") / experiment_id
     model_ext = "_fine_tuned_unknown" if fine_tuned_unknown else ""
     model_ext += "_with_temperature" if temperature_scaling else ""
@@ -120,116 +125,146 @@ def evaluate_experiment(experiment_id, temperature_scaling=False, fine_tuned_unk
     predictions_output_csv_path = str(experiment_dir / f"submission_fine_tuned_thresholding{ext}.csv")
     predictions_with_unknown_output_csv_path = str(
         experiment_dir / f"submission_with_unknowns_fine_tuned_thresholding{ext}.csv")
-    metrics_output_csv_path = str(experiment_dir / f"threshold_scores{ext}.csv")
-    scores_output_path = str(experiment_dir / f"competition_metrics_scores{ext}.json")
 
     data_dir = Path('__file__').parent.absolute().parent / "data" / "DF21"
     metadata_file_path = "../metadata/FungiCLEF2023_val_metadata_PRODUCTION.csv"
     test_metadata = pd.read_csv(metadata_file_path)
 
-    # Make predictions
-    make_submission(
-        test_metadata=test_metadata,
-        model_path=model_path,
-        images_root_path=data_dir,
-        output_csv_path=predictions_output_csv_path,
-        temp_scaling=temperature_scaling
-    )
+    # TODO: set thresholds on val
+    # TODO: evaluate on test - if the test set dataloader doesn't shuffle, should be able to use it for submission.csv
+    # TODO: remove train and val unknown examples from the ground truth for submission.csv before running evaluation
+    open_set_val_loader = None
+    closed_set_val_loader = None
+    open_set_test_loader = None
+    closed_set_test_loader = None
 
-    # Generate metrics from predictions
-    test_metadata.rename(columns={"observationID": "observation_id"}, inplace=True)
-    test_metadata.drop_duplicates("observation_id", keep="first", inplace=True)
-    y_true = test_metadata["class_id"].values
-    submission_df = pd.read_csv(predictions_output_csv_path)
-    submission_df.drop_duplicates("observation_id", keep="first", inplace=True)
-    y_proba = submission_df["max_proba"].values
-    scores = []
-    thresholds = []
+    # Make predictions if they need to be made. Skip if already computed.
+    if not from_outputs:
+        make_submission(
+            test_metadata=test_metadata,
+            model_path=model_path,
+            images_root_path=data_dir,
+            output_csv_path=predictions_output_csv_path,
+            temp_scaling=temperature_scaling
+        )
 
-    y_pred = np.copy(submission_df["class_id"].values)
-    best_threshold, threshold = None, None
-    score = f1_score(y_true, y_pred, average='macro')
-    best_f1 = score
-    thresholds.append(threshold)
-    scores.append(score)
+    for thresholding_method in ["_softmax", "_entropy"]:
 
-    for threshold in np.arange(0, 1, 0.05):
+        ext += thresholding_method
+        metrics_output_csv_path = str(experiment_dir / f"threshold_scores{ext}.csv")
+        scores_output_path = str(experiment_dir / f"competition_metrics_scores{ext}.json")
+
+        # Generate metrics from predictions
+        test_metadata.rename(columns={"observationID": "observation_id"}, inplace=True)
+        test_metadata.drop_duplicates("observation_id", keep="first", inplace=True)
+        y_true = test_metadata["class_id"].values
+        submission_df = pd.read_csv(predictions_output_csv_path)
+        submission_df.drop_duplicates("observation_id", keep="first", inplace=True)
+        if thresholding_method == "_softmax":
+            y_proba = submission_df["max_proba"].values
+            threshold_range = np.arange(0, 1, 0.05)
+        elif thresholding_method == "_entropy":
+            # taking -entropy so that threshold logic will work for softmax or entropy
+            # since high softmax proba == known, but high entropy == unknown
+            y_proba = -submission_df["entropy"].values
+            threshold_range = np.arange(y_proba.min(), y_proba.max(), 0.05)
+        else:
+            raise ValueError(f"unrecognized thresholding method {thresholding_method}")
+
+        scores = []
+        thresholds = []
+
         y_pred = np.copy(submission_df["class_id"].values)
-        y_pred[y_proba < threshold] = -1
+        best_threshold, threshold = None, None
         score = f1_score(y_true, y_pred, average='macro')
-        if score > best_f1:
-            best_f1 = score
-            best_threshold = threshold
+        best_f1 = score
+        thresholds.append(threshold)
+        scores.append(score)
         print(threshold, score)
-        thresholds.append(threshold)
-        scores.append(score)
-    for k in [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2]:
-        threshold = get_threshold(y_proba, k)
+
+        for threshold in threshold_range:
+            y_pred = np.copy(submission_df["class_id"].values)
+            y_pred[y_proba < threshold] = -1
+            score = f1_score(y_true, y_pred, average='macro')
+            if score > best_f1:
+                best_f1 = score
+                best_threshold = threshold
+            print(threshold, score)
+            thresholds.append(threshold)
+            scores.append(score)
+        for k in [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2]:
+            threshold = get_threshold(y_proba, k)
+            y_pred = np.copy(submission_df["class_id"].values)
+            y_pred[y_proba < threshold] = -1
+            score = f1_score(y_true, y_pred, average='macro')
+            if score > best_f1:
+                best_f1 = score
+                best_threshold = threshold
+            print(f"iqr_k{k}", threshold, score)
+            thresholds.append(threshold)
+            scores.append(score)
+        threshold_scores = pd.DataFrame()
+        threshold_scores['threshold'] = thresholds
+        threshold_scores['f1'] = scores
+        threshold_scores.sort_values('f1').to_csv(metrics_output_csv_path, index=False)
+
+        homebrewed_scores = dict()
+        # check disparity between training validation accuracy and validation set accuracy
+        y_pred_on_known = y_pred[~(y_true == -1)]
+        y_true_on_known = y_true[~(y_true == -1)]
+        balanced_accuracy_known_classes = balanced_accuracy_score(y_true_on_known, y_pred_on_known)
+        homebrewed_scores['balanced_accuracy_known_classes'] = balanced_accuracy_known_classes
+        print("balanced accuracy on known classes:", balanced_accuracy_known_classes)
+        accuracy_known_classes = accuracy_score(y_true_on_known, y_pred_on_known)
+        homebrewed_scores['accuracy_known_classes'] = accuracy_known_classes
+        print("unbalanced accuracy on known classes:", accuracy_known_classes)
+
+        # check unknown vs known binary f1 using best threshold
         y_pred = np.copy(submission_df["class_id"].values)
-        y_pred[y_proba < threshold] = -1
-        score = f1_score(y_true, y_pred, average='macro')
-        if score > best_f1:
-            best_f1 = score
-            best_threshold = threshold
-        print(f"iqr_k{k}", threshold, score)
-        thresholds.append(threshold)
-        scores.append(score)
-    threshold_scores = pd.DataFrame()
-    threshold_scores['threshold'] = thresholds
-    threshold_scores['f1'] = scores
-    threshold_scores.sort_values('f1').to_csv(metrics_output_csv_path, index=False)
+        y_pred[y_proba < best_threshold] = -1
+        y_true_known_vs_unknown = y_true.copy()
+        y_true_known_vs_unknown[~(y_true == -1)] = 1  # 1 is known
+        y_true_known_vs_unknown[(y_true == -1)] = 0  # 0 is unknown
+        y_pred_known_vs_unknown = y_pred.copy()
+        y_pred_known_vs_unknown[~(y_pred == -1)] = 1
+        y_pred_known_vs_unknown[(y_pred == -1)] = 0
+        f1_binary_known_vs_unknown = f1_score(y_true_known_vs_unknown, y_pred_known_vs_unknown, average='binary')
+        homebrewed_scores['f1_binary_known_vs_unknown'] = f1_binary_known_vs_unknown
+        print("F1 binary known vs unknown:", f1_binary_known_vs_unknown)
+        f1_macro_known_vs_unknown = f1_score(y_true_known_vs_unknown, y_pred_known_vs_unknown, average='macro')
+        homebrewed_scores['f1_macro_known_vs_unknown'] = f1_macro_known_vs_unknown
+        print("F1 macro known vs unknown:", f1_macro_known_vs_unknown)
+        roc_auc_known_vs_unknown = roc_auc_score(y_true_known_vs_unknown, y_pred_known_vs_unknown)
+        homebrewed_scores['roc_auc_known_vs_unknown'] = roc_auc_known_vs_unknown
+        print("roc_auc_known_vs_unknown:", roc_auc_known_vs_unknown)
 
-    homebrewed_scores = dict()
-    # check disparity between training validation accuracy and validation set accuracy
-    y_pred_on_known = y_pred[~(y_true == -1)]
-    y_true_on_known = y_true[~(y_true == -1)]
-    balanced_accuracy_known_classes = balanced_accuracy_score(y_true_on_known, y_pred_on_known)
-    homebrewed_scores['balanced_accuracy_known_classes'] = balanced_accuracy_known_classes
-    print("balanced accuracy on known classes:", balanced_accuracy_known_classes)
-    accuracy_known_classes = accuracy_score(y_true_on_known, y_pred_on_known)
-    homebrewed_scores['accuracy_known_classes'] = accuracy_known_classes
-    print("unbalanced accuracy on known classes:", accuracy_known_classes)
+        # make and save the unknown output csv
+        submission_df.loc[:, "class_id"] = y_pred
+        submission_df.to_csv(predictions_with_unknown_output_csv_path, index=False)
 
-    # check unknown vs known binary f1 using best threshold
-    y_pred = np.copy(submission_df["class_id"].values)
-    y_pred[y_proba < best_threshold] = -1
-    y_true_known_vs_unknown = y_true.copy()
-    y_true_known_vs_unknown[~(y_true == -1)] = 1  # 1 is known
-    y_true_known_vs_unknown[(y_true == -1)] = 0  # 0 is unknown
-    y_pred_known_vs_unknown = y_pred.copy()
-    y_pred_known_vs_unknown[~(y_pred == -1)] = 1
-    y_pred_known_vs_unknown[(y_pred == -1)] = 0
-    f1_binary_known_vs_unknown = f1_score(y_true_known_vs_unknown, y_pred_known_vs_unknown, average='binary')
-    homebrewed_scores['f1_binary_known_vs_unknown'] = f1_binary_known_vs_unknown
-    print("F1 binary known vs unknown:", f1_binary_known_vs_unknown)
-    f1_macro_known_vs_unknown = f1_score(y_true_known_vs_unknown, y_pred_known_vs_unknown, average='macro')
-    homebrewed_scores['f1_macro_known_vs_unknown'] = f1_macro_known_vs_unknown
-    print("F1 macro known vs unknown:", f1_macro_known_vs_unknown)
-    roc_auc_known_vs_unknown = roc_auc_score(y_true_known_vs_unknown, y_pred_known_vs_unknown)
-    homebrewed_scores['roc_auc_known_vs_unknown'] = roc_auc_known_vs_unknown
-    print("roc_auc_known_vs_unknown:", roc_auc_known_vs_unknown)
-
-    # make and save the unknown output csv
-    submission_df.loc[:, "class_id"] = y_pred
-    submission_df.to_csv(predictions_with_unknown_output_csv_path, index=False)
-
-    # add additional competition metrics
-    competition_metrics_scores = evaluate(
-        test_annotation_file=metadata_file_path,
-        user_submission_file=predictions_with_unknown_output_csv_path,
-        phase_codename="prediction-based",
-    )
-    competition_metrics_scores.update(homebrewed_scores)
-    with open(scores_output_path, "w") as f:
-        json.dump(competition_metrics_scores, f)
+        # add additional competition metrics
+        competition_metrics_scores = evaluate(
+            test_annotation_file=metadata_file_path,
+            user_submission_file=predictions_with_unknown_output_csv_path,
+            phase_codename="prediction-based",
+        )
+        # remove this metric since it's not used this year
+        del competition_metrics_scores["Track 4: Classification Error with Special Cost for Unknown"]
+        competition_metrics_scores.update(homebrewed_scores)
+        with open(scores_output_path, "w") as f:
+            json.dump(competition_metrics_scores, f)
 
 
 if __name__ == "__main__":
     experiment_id = "seesaw_04_02_2024"
-    # print(f"evaluating experiment {experiment_id}")
-    # evaluate_experiment(experiment_id=experiment_id)
+    outputs_precomputed = True
     print(f"evaluating experiment {experiment_id} with unknown fine tuning")
-    evaluate_experiment(experiment_id=experiment_id, fine_tuned_unknown=True)
+    evaluate_experiment(experiment_id=experiment_id, fine_tuned_unknown=True, from_outputs=outputs_precomputed)
     # TODO: address issue of evaluating on all the unknowns despite some being used for train, val in fine-tuning
-    # print(f"evaluating experiment {experiment_id} with temperature scaling")
-    # evaluate_experiment(experiment_id=experiment_id, temperature_scaling=True)
+    # TODO: set threshold on val, evaluate on test (this should also solve the above given a val loader for unknowns)
+    print(f"evaluating experiment {experiment_id}")
+    evaluate_experiment(experiment_id=experiment_id, from_outputs=outputs_precomputed)
+    outputs_precomputed = False
+    print(f"evaluating experiment {experiment_id} with temperature scaling")
+    evaluate_experiment(experiment_id=experiment_id, temperature_scaling=True, from_outputs=outputs_precomputed)
+    # TODO: test the combination of unknown fine tuning and temp scaling (need to temp scale fine tuned model first)

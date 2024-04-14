@@ -98,7 +98,12 @@ def train(model, data_loader, optimizer, criterion, open_criterion, loss_functio
         else:
             open_loss = torch.tensor(0.)
 
-        total_loss = loss.item() * n_closed + open_loss.item() * n_open
+        total_samples = (n_closed + n_open)
+        assert total_samples == image.shape[0]
+        closed_proportion = n_closed / total_samples
+        open_proportion = n_open / total_samples
+
+        total_loss = loss.item() * closed_proportion + open_loss.item() * open_proportion
         running_loss += total_loss
 
         # Calculate the accuracy.
@@ -146,7 +151,12 @@ def validate(model, data_loader, criterion, open_criterion, loss_function_id, de
         else:
             open_loss = torch.tensor(0.)
 
-        total_loss = loss.item() * n_closed + open_loss.item() * n_open
+        total_samples = (n_closed + n_open)
+        assert total_samples == image.shape[0]
+        closed_proportion = n_closed / total_samples
+        open_proportion = n_open / total_samples
+
+        total_loss = loss.item() * closed_proportion + open_loss.item() * open_proportion
         running_loss += total_loss
         # Calculate the accuracy.
         _, preds = torch.max(closed_outputs.data, 1)
@@ -276,14 +286,6 @@ def train_model(cfg: DictConfig) -> None:
         num_classes=n_classes,
         dropout_rate=dropout_rate,
     ).to(device)
-    parameters = add_weight_decay(model, weight_decay=weight_decay)
-    optimizer = optim.AdamW(parameters, lr=lr)
-
-    if lr_scheduler == "reducelronplateau":
-        scheduler = ReduceLROnPlateau(optimizer, 'min', patience=lr_scheduler_patience, verbose=True)
-    else:
-        scheduler = None
-        print(f"not using lr scheduler, config set to {lr_scheduler}")
 
     # TODO: refine/replace this logic
     resume_from_checkpoint = model_file_path if Path(model_file_path).exists() else None
@@ -297,11 +299,22 @@ def train_model(cfg: DictConfig) -> None:
         model.load_state_dict(checkpoint['model_state_dict'])
         try:
             optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+            optimizer.param_groups[0]["lr"] = lr
+            print("loaded optimizer state but replaced lr")
         except Exception as e:
             print(f"unable to load optimizer state due to {e}")
         model.to(device)
     else:
+        parameters = add_weight_decay(model, weight_decay=weight_decay)
+        optimizer = optim.AdamW(parameters, lr=lr)
         print(f"training new model: {experiment_id}")
+
+    # make scheduler after the optimizer has been created/modified
+    if lr_scheduler == "reducelronplateau":
+        scheduler = ReduceLROnPlateau(optimizer, 'min', patience=lr_scheduler_patience)
+    else:
+        scheduler = None
+        print(f"not using lr scheduler, config set to {lr_scheduler}")
 
     # Total parameters and trainable parameters.
     total_params = sum(p.numel() for p in model.parameters())
@@ -322,8 +335,7 @@ def train_model(cfg: DictConfig) -> None:
     open_criterion = UnknownLoss()
 
     if use_lr_finder:
-        optimizer = optim.Adam(model.parameters(), lr=1e-7, weight_decay=1e-2)
-        lr_finder = LRFinder(model, optimizer, criterion, device="cuda")
+        lr_finder = LRFinder(model, optimizer, criterion, device=device)
         lr_finder.range_test(train_loader, end_lr=100, num_iter=100)
         lr_finder.plot()  # to inspect the loss-learning rate graph
         lr_finder.reset()  # to reset the model and optimizer to their initial state
@@ -337,6 +349,8 @@ def train_model(cfg: DictConfig) -> None:
     for epoch in range(epochs):
 
         print(f"[INFO]: Epoch {epoch + 1} of {epochs}")
+        curr_lr = optimizer.param_groups[0]["lr"]
+        print(f"current learning rate: {curr_lr:.0e}")
         recreate_loader = True
         while recreate_loader:
             try:
@@ -379,7 +393,7 @@ def train_model(cfg: DictConfig) -> None:
             checkpoint_model(epoch + 1, model, optimizer, criterion, valid_epoch_loss, updated_model_file_path)
             print(">> successfully updated best model <<")
         elif epoch - best_epoch > early_stop_thresh:
-            print("Early stopped training at epoch %d" % epoch)
+            print(f"Early stopped training at epoch {epoch + 1}")
             break  # terminate the training loop
         else:
             print(f"model did not improve from best epoch {best_epoch + 1} with loss {best_validation_loss: .3f}")

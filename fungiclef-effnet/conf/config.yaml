@@ -46,7 +46,7 @@ temp-scaling:
 unknown-fine-tune:
   experiment_id: "seesaw_04_02_2024"
   epochs: 200
-  lr: 8e-4
+  lr: 8e-5
   batch_size: 128
   early_stop_thresh: 10
   loss_function: "seesaw"
