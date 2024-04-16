@@ -23,7 +23,7 @@ from closedset_model import build_model, unfreeze_model
 from datasets import get_datasets, get_data_loaders
 from evaluate import evaluate_experiment
 from utils import save_plots, checkpoint_model
-from losses import SeesawLoss, SupConLoss
+from losses import SeesawLoss, SupConLoss, CompositeLoss
 
 
 def add_weight_decay(model, weight_decay=1e-5, skip_list=()):
@@ -79,10 +79,7 @@ def train(model, trainloader, optimizer, criterion, loss_function_id, max_norm, 
         # Forward pass.
         outputs = model(image)
         # Calculate the loss.
-        if loss_function_id == "focal":
-            loss = criterion(m(outputs), labels)
-        else:
-            loss = criterion(outputs, labels)
+        loss = criterion(outputs, labels)
         train_running_loss += loss.item()
         # Calculate the accuracy.
         _, preds = torch.max(outputs.data, 1)
@@ -97,12 +94,12 @@ def train(model, trainloader, optimizer, criterion, loss_function_id, max_norm, 
     # Loss and accuracy for the complete epoch.
     epoch_loss = train_running_loss / i + 1
     epoch_acc = 100. * (train_running_correct / len(trainloader.dataset))
-    return epoch_loss.cpu().numpy(), epoch_acc
+    return epoch_loss, epoch_acc
 
 
 # Validation function.
 @torch.no_grad()
-def validate(model, testloader, criterion, loss_function_id, device='cpu', scheduler=None):
+def validate(model, testloader, criterion, loss_function_id, device='cpu'):
     model.eval()
     print(f'Validation with device {device}')
     valid_running_loss = 0.0
@@ -115,10 +112,7 @@ def validate(model, testloader, criterion, loss_function_id, device='cpu', sched
         # Forward pass.
         outputs = model(image)
         # Calculate the loss.
-        if loss_function_id == "focal":
-            loss = criterion(m(outputs), labels)
-        else:
-            loss = criterion(outputs, labels)
+        loss = criterion(outputs, labels)
         valid_running_loss += loss.item()
         # Calculate the accuracy.
         _, preds = torch.max(outputs.data, 1)
@@ -126,10 +120,20 @@ def validate(model, testloader, criterion, loss_function_id, device='cpu', sched
 
     # Loss and accuracy for the complete epoch.
     epoch_loss = valid_running_loss / i + 1
-    if scheduler:
-        scheduler.step(epoch_loss)
     epoch_acc = 100. * (valid_running_correct / len(testloader.dataset))
-    return epoch_loss.cpu().numpy(), epoch_acc
+    return epoch_loss, epoch_acc
+
+
+def create_scheduler_and_optimizer(model, lr, weight_decay, lr_scheduler, lr_scheduler_patience):
+    parameters = add_weight_decay(model, weight_decay=weight_decay)
+    optimizer = optim.AdamW(parameters, lr=lr)
+    # make scheduler after the optimizer has been created/modified
+    if lr_scheduler == "reducelronplateau":
+        scheduler = ReduceLROnPlateau(optimizer, 'min', patience=lr_scheduler_patience)
+    else:
+        scheduler = None
+        print(f"not using lr scheduler, config set to {lr_scheduler}")
+    return optimizer, scheduler
 
 
 @hydra.main(version_base=None, config_path="conf", config_name="config")
@@ -139,7 +143,8 @@ def train_model(cfg: DictConfig) -> None:
     lr = cfg["train"]["lr"]
     pretrained = cfg["train"]["pretrained"]
     early_stop_thresh = cfg["train"]["early_stop_thresh"]
-    loss_function = cfg["train"]["loss_function"]
+    multiclass_loss_function = cfg["train"]["loss_function"]
+    use_poison_loss = cfg["train"]["use_poison_loss"]
     batch_size = cfg["train"]["batch_size"]
     num_dataloader_workers = cfg["train"]["num_dataloader_workers"]
     image_resize = cfg["train"]["image_resize"]
@@ -213,10 +218,9 @@ def train_model(cfg: DictConfig) -> None:
         print(f"resuming from checkpoint: {model_file_path}")
         # https://pytorch.org/tutorials/beginner/saving_loading_models.html
         checkpoint = torch.load(resume_from_checkpoint)
-        # optimizer = optim.Adam(model.parameters(), lr=lr)
-        parameters = add_weight_decay(model, weight_decay=weight_decay)
-        optimizer = optim.AdamW(parameters, lr=lr)
         model.load_state_dict(checkpoint['model_state_dict'])
+        optimizer, scheduler = create_scheduler_and_optimizer(model, lr, weight_decay, lr_scheduler,
+                                                              lr_scheduler_patience)
         try:
             optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
             optimizer.param_groups[0]["lr"] = lr
@@ -225,16 +229,9 @@ def train_model(cfg: DictConfig) -> None:
             print(f"unable to load optimizer state due to {e}")
         model.to(device)
     else:
-        parameters = add_weight_decay(model, weight_decay=weight_decay)
-        optimizer = optim.AdamW(parameters, lr=lr)
+        optimizer, scheduler = create_scheduler_and_optimizer(model, lr, weight_decay, lr_scheduler,
+                                                              lr_scheduler_patience)
         print(f"training new model: {experiment_id}")
-
-    # make scheduler after the optimizer has been created/modified
-    if lr_scheduler == "reducelronplateau":
-        scheduler = ReduceLROnPlateau(optimizer, 'min', patience=lr_scheduler_patience)
-    else:
-        scheduler = None
-        print(f"not using lr scheduler, config set to {lr_scheduler}")
 
     # Total parameters and trainable parameters.
     total_params = sum(p.numel() for p in model.parameters())
@@ -243,14 +240,15 @@ def train_model(cfg: DictConfig) -> None:
         p.numel() for p in model.parameters() if p.requires_grad)
     print(f"{total_trainable_params:,} training parameters.")
 
-    if loss_function == "seesaw":
-        criterion = SeesawLoss(num_classes=n_classes, device=device)
-    elif loss_function == "focal":
-        criterion = FocalLoss(gamma=0.7)
-    elif loss_function == "crossentropy":
-        criterion = nn.CrossEntropyLoss()
+    if multiclass_loss_function == "seesaw":
+        multiclass_loss = SeesawLoss(num_classes=n_classes, device=device)
+    elif multiclass_loss_function == "focal":
+        multiclass_loss = FocalLoss(gamma=0.7)
+    elif multiclass_loss_function == "crossentropy":
+        multiclass_loss = nn.CrossEntropyLoss()
     else:
-        raise ValueError(f"Unsupported loss function: {loss_function}")
+        raise ValueError(f"Unsupported loss function: {multiclass_loss_function}")
+    criterion = CompositeLoss(multiclass_loss=multiclass_loss, use_poison_loss=use_poison_loss)
 
     if use_lr_finder:
         lr_finder = LRFinder(model, optimizer, criterion, device=device)
@@ -271,8 +269,8 @@ def train_model(cfg: DictConfig) -> None:
                               epoch + 1 > fine_tune_after_n_epochs)):
             model = unfreeze_model(model)
             print("all layers unfrozen")
-            parameters = add_weight_decay(model, weight_decay=weight_decay)
-            optimizer = optim.AdamW(parameters, lr=lr)
+            optimizer, scheduler = create_scheduler_and_optimizer(model, lr, weight_decay, lr_scheduler,
+                                                                  lr_scheduler_patience)
             unfrozen = True
 
         print(f"[INFO]: Epoch {epoch + 1} of {epochs}")
@@ -282,7 +280,8 @@ def train_model(cfg: DictConfig) -> None:
         while recreate_loader:
             try:
                 train_epoch_loss, train_epoch_acc = train(model, train_loader,
-                                                          optimizer, criterion, loss_function, max_norm, device)
+                                                          optimizer, criterion, multiclass_loss_function, max_norm,
+                                                          device)
                 recreate_loader = False
             except Exception as e:
                 print("issue with training")
@@ -296,7 +295,9 @@ def train_model(cfg: DictConfig) -> None:
         while recreate_loader:
             try:
                 valid_epoch_loss, valid_epoch_acc = validate(model, valid_loader,
-                                                             criterion, loss_function, device, scheduler)
+                                                             criterion, multiclass_loss_function, device)
+                if scheduler:
+                    scheduler.step(valid_epoch_loss)
                 recreate_loader = False
             except Exception as e:
                 print("issue with validation")

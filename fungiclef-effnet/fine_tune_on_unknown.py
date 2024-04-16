@@ -86,14 +86,14 @@ def train(model, data_loader, optimizer, criterion, open_criterion, loss_functio
         outputs = model(image)
         open_outputs, closed_outputs, _, closed_labels, n_open, n_closed = split_open_closed(outputs, labels)
         # Calculate the loss.
-        if n_open > 0:
+        if n_closed > 0:
             if loss_function_id == "focal":
                 loss = criterion(m(closed_outputs), closed_labels)
             else:
                 loss = criterion(closed_outputs, closed_labels)
         else:
             loss = torch.tensor(0.)
-        if n_closed > 0:
+        if n_open > 0:
             open_loss = open_criterion(open_outputs)
         else:
             open_loss = torch.tensor(0.)

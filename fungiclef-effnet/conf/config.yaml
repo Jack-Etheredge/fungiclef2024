@@ -1,11 +1,13 @@
 # reference: https://hydra.cc/docs/tutorials/basic/your_first_app/using_config/
 train:
-  experiment_id: null
+  experiment_id: "2024-04-16 08:41:54.025350"
   epochs: 200
-  lr: 8e-4
+  lr: 1.24e-4  # found with lr finder, decreased for reduceLR
+  use_lr_finder: False
   pretrained: True
   early_stop_thresh: 10
   loss_function: "seesaw"
+  use_poison_loss: True
   batch_size: 128
   num_dataloader_workers: 16
   image_resize: 224
@@ -18,14 +20,13 @@ train:
   dropout_rate: 0.5
   weight_decay: 1e-5
   balanced_sampler: False
-  use_lr_finder: False
   fine_tune_after_n_epochs: 4
-  skip_frozen_epochs_load_failed_model: False
-  notes: model is efficientnet_b0 with imagenet weights and autoaug augmentations
+  skip_frozen_epochs_load_failed_model: True
+  notes: model is efficientnet_b0 with imagenet weights and trivialaug
   n_classes: 1604
   worker_timeout_s: 120
   lr_scheduler: "reducelronplateau"
-  lr_scheduler_patience: 5
+  lr_scheduler_patience: 4
 open-set-recognition:
   embedder_experiment_id: "seesaw_04_02_2024"
   embedder_layer_offset: -1
@@ -52,4 +53,4 @@ unknown-fine-tune:
   loss_function: "seesaw"
   use_lr_finder: False
   lr_scheduler: "reducelronplateau"
-  lr_scheduler_patience: 5
+  lr_scheduler_patience: 4
