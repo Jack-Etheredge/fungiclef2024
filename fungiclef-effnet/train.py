@@ -20,7 +20,7 @@ from omegaconf import DictConfig, OmegaConf
 
 from paths import CHECKPOINT_DIR
 from closedset_model import build_model, unfreeze_model
-from datasets import get_datasets, get_data_loaders
+from datasets import get_datasets, get_data_loaders, get_dataloader_combine_and_balance_datasets, get_openset_datasets
 from evaluate import evaluate_experiment
 from utils import save_plots, checkpoint_model
 from losses import SeesawLoss, SupConLoss, CompositeLoss
@@ -162,6 +162,12 @@ def train_model(cfg: DictConfig) -> None:
     skip_frozen_epochs_load_failed_model = cfg["train"]["skip_frozen_epochs_load_failed_model"]
     lr_scheduler = cfg["train"]["lr_scheduler"]
     lr_scheduler_patience = cfg["train"]["lr_scheduler_patience"]
+    include_unknowns = cfg["train"]["include_unknowns"]
+    n_classes = cfg["train"]["n_classes"]
+
+    image_size = cfg["open-set-recognition"]["image_size"]
+    openset_n_train = cfg["open-set-recognition"]["openset_n_train"]
+    openset_n_val = cfg["open-set-recognition"]["openset_n_val"]
 
     for k, v in cfg["train"].items():
         if v == "None" or v == "null":
@@ -186,28 +192,26 @@ def train_model(cfg: DictConfig) -> None:
     with open(str(experiment_dir / "experiment_config.json"), "w") as f:
         json.dump(config_dict, f)
 
-    torch.autograd.set_detect_anomaly(True)
+    # torch.autograd.set_detect_anomaly(True)
 
-    # Load the training and validation datasets.
-    dataset_train, dataset_valid, dataset_classes = get_datasets(pretrained, image_resize, validation_frac,
-                                                                 oversample=oversample, undersample=undersample,
-                                                                 oversample_prop=oversample_prop,
-                                                                 equal_undersampled_val=equal_undersampled_val)
-    n_classes = len(dataset_classes)
-    print(f"[INFO]: Number of training images: {len(dataset_train)}")
-    print(f"[INFO]: Number of validation images: {len(dataset_valid)}")
-    print(f"[INFO]: Class names: {dataset_classes}\n")
+    train_loader, val_loader = create_train_val_loaders(balanced_sampler, batch_size,
+                                                        equal_undersampled_val,
+                                                        image_resize, image_size,
+                                                        include_unknowns,
+                                                        num_dataloader_workers,
+                                                        openset_n_train, openset_n_val,
+                                                        oversample, oversample_prop,
+                                                        pretrained, undersample,
+                                                        validation_frac)
+
     device = ('cuda:0' if torch.cuda.is_available() else 'cpu')
     print(f"Computation device: {device}")
-    # Load the training and validation data loaders.
-    train_loader, valid_loader = get_data_loaders(dataset_train, dataset_valid, batch_size, num_dataloader_workers,
-                                                  balanced_sampler=balanced_sampler)
     print(f"Learning rate: {lr}")
     print(f"Epochs to train for: {epochs}\n")
 
     model = build_model(
         pretrained=pretrained,
-        fine_tune=not fine_tune_after_n_epochs,
+        fine_tune=not fine_tune_after_n_epochs or skip_frozen_epochs_load_failed_model,
         num_classes=n_classes,
         dropout_rate=dropout_rate,
     ).to(device)
@@ -287,14 +291,17 @@ def train_model(cfg: DictConfig) -> None:
                 print("issue with training")
                 print(e)
                 print("recreating data loaders and trying again")
-                train_loader, valid_loader = get_data_loaders(dataset_train, dataset_valid, batch_size,
-                                                              num_dataloader_workers,
-                                                              balanced_sampler=balanced_sampler)
+                train_loader, val_loader = create_train_val_loaders(balanced_sampler, batch_size,
+                                                                    equal_undersampled_val, image_resize, image_size,
+                                                                    include_unknowns, num_dataloader_workers,
+                                                                    openset_n_train, openset_n_val, oversample,
+                                                                    oversample_prop, pretrained, undersample,
+                                                                    validation_frac)
 
         recreate_loader = True
         while recreate_loader:
             try:
-                valid_epoch_loss, valid_epoch_acc = validate(model, valid_loader,
+                valid_epoch_loss, valid_epoch_acc = validate(model, val_loader,
                                                              criterion, multiclass_loss_function, device)
                 if scheduler:
                     scheduler.step(valid_epoch_loss)
@@ -303,9 +310,12 @@ def train_model(cfg: DictConfig) -> None:
                 print("issue with validation")
                 print(e)
                 print("recreating data loaders and trying again")
-                train_loader, valid_loader = get_data_loaders(dataset_train, dataset_valid, batch_size,
-                                                              num_dataloader_workers,
-                                                              balanced_sampler=balanced_sampler)
+                train_loader, val_loader = create_train_val_loaders(balanced_sampler, batch_size,
+                                                                    equal_undersampled_val, image_resize, image_size,
+                                                                    include_unknowns, num_dataloader_workers,
+                                                                    openset_n_train, openset_n_val, oversample,
+                                                                    oversample_prop, pretrained, undersample,
+                                                                    validation_frac)
 
         train_loss.append(train_epoch_loss)
         valid_loss.append(valid_epoch_loss)
@@ -336,6 +346,45 @@ def train_model(cfg: DictConfig) -> None:
     print('evaluating')
     evaluate_experiment(experiment_id=experiment_id)
     print('EVALUATION COMPLETE')
+
+
+def create_train_val_loaders(balanced_sampler, batch_size, equal_undersampled_val, image_resize, image_size,
+                             include_unknowns, num_dataloader_workers, openset_n_train, openset_n_val, oversample,
+                             oversample_prop, pretrained, undersample, validation_frac):
+    # TODO: consider passing the entire config to this function instead
+    if include_unknowns:
+        # Load the training and validation datasets.
+        closed_dataset_train, closed_dataset_val, _ = get_datasets(pretrained, image_resize,
+                                                                   validation_frac,
+                                                                   oversample=oversample,
+                                                                   undersample=undersample,
+                                                                   oversample_prop=oversample_prop,
+                                                                   equal_undersampled_val=equal_undersampled_val)
+        open_dataset_train, open_dataset_val, _ = get_openset_datasets(pretrained=pretrained, image_size=image_size,
+                                                                       n_train=openset_n_train, n_val=openset_n_val)
+        print("[[train]] combining dataloaders and balancing classes")
+        train_loader = get_dataloader_combine_and_balance_datasets(closed_dataset_train, open_dataset_train,
+                                                                   batch_size=batch_size, unknowns=True)
+        print("[[val]] combining dataloaders and balancing classes")
+        val_loader = get_dataloader_combine_and_balance_datasets(closed_dataset_val, open_dataset_val,
+                                                                 batch_size=batch_size, unknowns=True)
+
+        print(f"[INFO]: Number of closed set training images: {len(closed_dataset_train)}")
+        print(f"[INFO]: Number of closed set validation images: {len(closed_dataset_val)}")
+        print(f"[INFO]: Number of open set training images: {len(open_dataset_train)}")
+        print(f"[INFO]: Number of open set validation images: {len(open_dataset_val)}")
+    else:
+        # Load the training and validation datasets.
+        dataset_train, dataset_valid, dataset_classes = get_datasets(pretrained, image_resize, validation_frac,
+                                                                     oversample=oversample, undersample=undersample,
+                                                                     oversample_prop=oversample_prop,
+                                                                     equal_undersampled_val=equal_undersampled_val)
+        # Load the training and validation data loaders.
+        train_loader, val_loader = get_data_loaders(dataset_train, dataset_valid, batch_size, num_dataloader_workers,
+                                                    balanced_sampler=balanced_sampler)
+        print(f"[INFO]: Number of training images: {len(dataset_train)}")
+        print(f"[INFO]: Number of validation images: {len(dataset_valid)}")
+    return train_loader, val_loader
 
 
 if __name__ == '__main__':
