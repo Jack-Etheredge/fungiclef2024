@@ -8,8 +8,6 @@ from hydra import compose, initialize
 from omegaconf import OmegaConf
 from sklearn.metrics import accuracy_score, balanced_accuracy_score, f1_score, roc_auc_score
 from tqdm import tqdm
-import torchvision.models as models
-import torch.nn as nn
 from torchvision.transforms import v2
 from PIL import Image
 import torch
@@ -44,8 +42,8 @@ def get_threshold(max_prob_list, k):
 class PytorchWorker:
     """Run inference using PyTorch."""
 
-    def __init__(self, model_path: str, number_of_categories: int = 1604, temp_scaling=False, model_id="efficient_b0",
-                 use_timm=True):
+    def __init__(self, model_path: str, number_of_categories: int = 1604, temp_scaling=False,
+                 model_id="efficientnet_b0", use_timm=True):
         self.number_of_categories = number_of_categories  # must be set before calling _load_model
         self.temp_scaling = temp_scaling  # must be set before calling _load_model
         self.model_id = model_id  # must be set before calling _load_model
@@ -98,7 +96,7 @@ class PytorchWorker:
 def make_submission(test_metadata, model_path, output_csv_path, images_root_path, temp_scaling, model_id, use_timm):
     """Make submission with given """
     # TODO: use the dataloader with a larger batch size to speed up inference
-
+    # TODO: pull this transformation from the datasets module
     model = PytorchWorker(model_path, temp_scaling=temp_scaling, model_id=model_id, use_timm=use_timm)
 
     # this allows use on both validation and test
@@ -280,6 +278,8 @@ if __name__ == "__main__":
     # TODO: add openGAN training and evaluation as a part of this script
     # TODO: address issue of evaluating on all the unknowns despite some being used for train, val in fine-tuning
     # TODO: set threshold on val, evaluate on test (this should also solve the above given a val loader for unknowns)
+    # TODO: use dataloader with a larger batch size to speed up inference
+    # TODO: pull test transformations from the datasets module
 
     with initialize(version_base=None, config_path="conf", job_name="evaluate"):
         cfg = compose(config_name="config")
@@ -289,12 +289,10 @@ if __name__ == "__main__":
     use_timm = cfg["evaluate"]["use_timm"]
     model_id = cfg["evaluate"]["model_id"]
 
-    outputs_precomputed = True
+    outputs_precomputed = False
     print(f"evaluating experiment {experiment_id}")
     evaluate_experiment(experiment_id=experiment_id, from_outputs=outputs_precomputed)
-    # make sure the experiment_id is set in cfg["temp-scaling"]["experiment_id"]
     print("creating temperature scaled model")
-    outputs_precomputed = False
     create_temperature_scaled_model(cfg)
     print(f"evaluating experiment {experiment_id} with temperature scaling")
     evaluate_experiment(experiment_id=experiment_id, temperature_scaling=True, from_outputs=outputs_precomputed)

@@ -46,8 +46,8 @@ open-set-recognition:
   closedset_n_train: 50000
   embedding_size: 1280
 evaluate:
-  experiment_id: "2024-04-19-unknown-from-start"
-  model_id: "efficient_b0"
+  experiment_id: "2024-04-16 unknown fine tune"
+  model_id: "efficientnet_b0"
   use_timm: False
 unknown-fine-tune:
   experiment_id: "seesaw_04_02_2024"
