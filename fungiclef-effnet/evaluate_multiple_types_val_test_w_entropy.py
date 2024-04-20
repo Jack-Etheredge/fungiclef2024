@@ -4,6 +4,8 @@ import pandas as pd
 import numpy as np
 import os
 
+from hydra import compose, initialize
+from omegaconf import OmegaConf
 from sklearn.metrics import accuracy_score, balanced_accuracy_score, f1_score, roc_auc_score
 from tqdm import tqdm
 import torchvision.models as models
@@ -15,8 +17,11 @@ from pathlib import Path
 from PIL import ImageFile
 from scipy.special import softmax
 from scipy.stats import entropy
+
+from closedset_model import build_model
 from competition_metrics import evaluate
 from temperature_scaling import ModelWithTemperature
+from temp_scale_model import create_temperature_scaled_model
 
 np.set_printoptions(precision=5)
 ImageFile.LOAD_TRUNCATED_IMAGES = True
@@ -39,9 +44,12 @@ def get_threshold(max_prob_list, k):
 class PytorchWorker:
     """Run inference using PyTorch."""
 
-    def __init__(self, model_path: str, number_of_categories: int = 1604, temp_scaling=False):
-        self.number_of_categories = number_of_categories
+    def __init__(self, model_path: str, number_of_categories: int = 1604, temp_scaling=False, model_id="efficient_b0",
+                 use_timm=True):
+        self.number_of_categories = number_of_categories  # must be set before calling _load_model
         self.temp_scaling = temp_scaling  # must be set before calling _load_model
+        self.model_id = model_id  # must be set before calling _load_model
+        self.use_timm = use_timm  # must be set before calling _load_model
         self.model = self._load_model(model_path)
         self.transforms = v2.Compose([
             v2.Resize(256, interpolation=v2.InterpolationMode.BICUBIC, antialias=True),
@@ -55,8 +63,17 @@ class PytorchWorker:
         print("Setting up Pytorch Model")
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         print(f"Using devide: {self.device}")
-        model = models.efficientnet_b0()
-        model.classifier[1] = nn.Linear(in_features=1280, out_features=self.number_of_categories)
+        # model = models.efficientnet_b0()
+        # model.classifier[1] = nn.Linear(in_features=1280, out_features=self.number_of_categories)
+        model = build_model(
+            model_id=self.model_id,
+            pretrained=False,
+            fine_tune=False,
+            num_classes=self.number_of_categories,
+            # this is all that matters. everything else will be overwritten by checkpoint state
+            dropout_rate=0.5,
+            use_timm=self.use_timm,
+        ).to(self.device)
         model_ckpt = torch.load(model_path, map_location=self.device)
         if self.temp_scaling:
             model = ModelWithTemperature(model)
@@ -78,11 +95,11 @@ class PytorchWorker:
         return logits.tolist()
 
 
-def make_submission(test_metadata, model_path, output_csv_path, images_root_path, temp_scaling):
+def make_submission(test_metadata, model_path, output_csv_path, images_root_path, temp_scaling, model_id, use_timm):
     """Make submission with given """
     # TODO: use the dataloader with a larger batch size to speed up inference
 
-    model = PytorchWorker(model_path, temp_scaling=temp_scaling)
+    model = PytorchWorker(model_path, temp_scaling=temp_scaling, model_id=model_id, use_timm=use_timm)
 
     # this allows use on both validation and test
     test_metadata.rename(columns={"observationID": "observation_id"}, inplace=True)
@@ -145,7 +162,9 @@ def evaluate_experiment(experiment_id, temperature_scaling=False, fine_tuned_unk
             model_path=model_path,
             images_root_path=data_dir,
             output_csv_path=predictions_output_csv_path,
-            temp_scaling=temperature_scaling
+            temp_scaling=temperature_scaling,
+            model_id=model_id,
+            use_timm=use_timm,
         )
 
     for thresholding_method in ["_softmax", "_entropy"]:
@@ -248,6 +267,8 @@ def evaluate_experiment(experiment_id, temperature_scaling=False, fine_tuned_unk
             user_submission_file=predictions_with_unknown_output_csv_path,
             phase_codename="prediction-based",
         )
+        # deduplicate and flatten results
+        competition_metrics_scores = competition_metrics_scores["submission_result"]
         # remove this metric since it's not used this year
         del competition_metrics_scores["Track 4: Classification Error with Special Cost for Unknown"]
         competition_metrics_scores.update(homebrewed_scores)
@@ -256,15 +277,24 @@ def evaluate_experiment(experiment_id, temperature_scaling=False, fine_tuned_unk
 
 
 if __name__ == "__main__":
-    experiment_id = "seesaw_04_02_2024"
-    outputs_precomputed = True
-    print(f"evaluating experiment {experiment_id} with unknown fine tuning")
-    evaluate_experiment(experiment_id=experiment_id, fine_tuned_unknown=True, from_outputs=outputs_precomputed)
+    # TODO: add openGAN training and evaluation as a part of this script
     # TODO: address issue of evaluating on all the unknowns despite some being used for train, val in fine-tuning
     # TODO: set threshold on val, evaluate on test (this should also solve the above given a val loader for unknowns)
+
+    with initialize(version_base=None, config_path="conf", job_name="evaluate"):
+        cfg = compose(config_name="config")
+    print(OmegaConf.to_yaml(cfg))
+
+    experiment_id = cfg["evaluate"]["experiment_id"]
+    use_timm = cfg["evaluate"]["use_timm"]
+    model_id = cfg["evaluate"]["model_id"]
+
+    outputs_precomputed = True
     print(f"evaluating experiment {experiment_id}")
     evaluate_experiment(experiment_id=experiment_id, from_outputs=outputs_precomputed)
+    # make sure the experiment_id is set in cfg["temp-scaling"]["experiment_id"]
+    print("creating temperature scaled model")
     outputs_precomputed = False
+    create_temperature_scaled_model(cfg)
     print(f"evaluating experiment {experiment_id} with temperature scaling")
     evaluate_experiment(experiment_id=experiment_id, temperature_scaling=True, from_outputs=outputs_precomputed)
-    # TODO: test the combination of unknown fine tuning and temp scaling (need to temp scale fine tuned model first)

@@ -1,6 +1,8 @@
 # reference: https://hydra.cc/docs/tutorials/basic/your_first_app/using_config/
 train:
   experiment_id: null
+  model_id: "efficientnet_b0"
+  use_timm: False
   epochs: 200
   lr: 1.44e-2  # found with lr finder
   use_lr_finder: False
@@ -43,8 +45,10 @@ open-set-recognition:
   openset_n_val: 200
   closedset_n_train: 50000
   embedding_size: 1280
-temp-scaling:
-  experiment_id: "seesaw_04_02_2024"
+evaluate:
+  experiment_id: "2024-04-19-unknown-from-start"
+  model_id: "efficient_b0"
+  use_timm: False
 unknown-fine-tune:
   experiment_id: "seesaw_04_02_2024"
   epochs: 200

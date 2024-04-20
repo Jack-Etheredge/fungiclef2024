@@ -1,16 +1,14 @@
 import torch
+from hydra import compose, initialize
 
 from temperature_scaling import ModelWithTemperature
-import hydra
 from omegaconf import DictConfig, OmegaConf
 from closedset_model import build_model
 from paths import CHECKPOINT_DIR
 from datasets import get_data_loaders, get_datasets
 
 
-@hydra.main(version_base=None, config_path="conf", config_name="config")
 def create_temperature_scaled_model(cfg: DictConfig) -> None:
-    print(OmegaConf.to_yaml(cfg))
     n_classes = cfg["train"]["n_classes"]
     pretrained = cfg["train"]["pretrained"]
     batch_size = cfg["train"]["batch_size"]
@@ -22,7 +20,10 @@ def create_temperature_scaled_model(cfg: DictConfig) -> None:
     equal_undersampled_val = cfg["train"]["equal_undersampled_val"]
     oversample_prop = cfg["train"]["oversample_prop"]
     balanced_sampler = cfg["train"]["balanced_sampler"]
-    experiment_id = cfg["temp-scaling"]["experiment_id"]
+
+    experiment_id = cfg["evaluate"]["experiment_id"]
+    use_timm = cfg["evaluate"]["use_timm"]
+    model_id = cfg["evaluate"]["model_id"]
 
     print(f"creating temperature scaled model {experiment_id}")
 
@@ -41,10 +42,12 @@ def create_temperature_scaled_model(cfg: DictConfig) -> None:
                                        balanced_sampler=balanced_sampler)
 
     model = build_model(
+        model_id=model_id,
         pretrained=False,
         fine_tune=False,
         num_classes=n_classes,  # this is all that matters. everything else will be overwritten by checkpoint state
         dropout_rate=0.5,
+        use_timm=use_timm,
     ).to(device)
     model.eval()
     checkpoint = torch.load(checkpoint_path)
@@ -56,4 +59,8 @@ def create_temperature_scaled_model(cfg: DictConfig) -> None:
 
 
 if __name__ == "__main__":
-    create_temperature_scaled_model()
+    # using this instead of @hydra.main decorator so create_temperature_scaled_model can be called from elsewhere
+    with initialize(version_base=None, config_path="conf", job_name="evaluate"):
+        cfg = compose(config_name="config")
+    print(OmegaConf.to_yaml(cfg))
+    create_temperature_scaled_model(cfg)
