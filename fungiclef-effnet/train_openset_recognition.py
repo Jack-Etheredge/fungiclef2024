@@ -108,7 +108,7 @@ def train(discriminator, data, criterion, optimizer, device):
 @hydra.main(version_base=None, config_path="conf", config_name="config")
 def main(cfg: DictConfig) -> None:
     print(OmegaConf.to_yaml(cfg))
-    embedder_experiment_id = cfg["open-set-recognition"]["embedder_experiment_id"]
+    embedder_experiment_id = cfg["evaluate"]["experiment_id"]
     openset_embeddings_name = cfg["open-set-recognition"]["openset_embeddings_name"]
     closedset_embeddings_name = cfg["open-set-recognition"]["closedset_embeddings_name"]
     embedding_size = cfg["open-set-recognition"]["embedding_size"]  # Number of channels in the embedding

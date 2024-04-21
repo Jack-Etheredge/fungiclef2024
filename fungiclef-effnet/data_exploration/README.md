@@ -1,0 +1,2 @@
+- These scripts were originally run from the top level and probably have broken pathing now.
+- They will probably be removed at a later date since their purpose was data exploration or one-off proof of concept.

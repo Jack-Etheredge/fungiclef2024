@@ -1,13 +1,21 @@
 # reference: https://hydra.cc/docs/tutorials/basic/your_first_app/using_config/
 train:
   experiment_id: null
+  model_id: "tf_efficientnetv2_s.in21k"
+  # eva02_large_patch14_clip_336.merged2b_ft_inat21
+  # tf_efficientnetv2_s.in21k
+  use_timm: True
   epochs: 200
-  lr: 8e-4
+  lr: 4.6e-2  # found with lr finder
+  use_lr_finder: False
   pretrained: True
   early_stop_thresh: 10
   loss_function: "seesaw"
+  use_poison_loss: True  # check me
+  include_unknowns: False  # check me
   batch_size: 128
   num_dataloader_workers: 16
+  worker_timeout_s: 180
   image_resize: 224
   validation_frac: 0.1
   max_norm: 1.0
@@ -15,41 +23,37 @@ train:
   oversample: False
   equal_undersampled_val: True
   oversample_prop: 0.1
-  dropout_rate: 0.5
+  dropout_rate: 0.0
   weight_decay: 1e-5
   balanced_sampler: False
-  use_lr_finder: False
   fine_tune_after_n_epochs: 4
-  skip_frozen_epochs_load_failed_model: False
-  notes: model is efficientnet_b0 with imagenet weights and autoaug augmentations
+  skip_frozen_epochs_load_failed_model: False  # check me
+  notes: trivialaug  # check me
   n_classes: 1604
-  worker_timeout_s: 120
   lr_scheduler: "reducelronplateau"
-  lr_scheduler_patience: 5
+  lr_scheduler_patience: 4
 open-set-recognition:
-  embedder_experiment_id: "seesaw_04_02_2024"
   embedder_layer_offset: -1
-  dlr: 1e-5
-  glr: 1e-5
+  dlr: 1e-6
+  glr: 1e-6
+  seed: 999
   batch_size: 128
   n_workers: 16
-  openset_embeddings_name: "openset_embeddings_${open-set-recognition.embedder_experiment_id}.h5"
-  closedset_embeddings_name: "closedset_embeddings_${open-set-recognition.embedder_experiment_id}.h5"
+  epochs: 100
+  openset_embeddings_name: "openset_embeddings_${evaluate.experiment_id}.h5"
+  closedset_embeddings_name: "closedset_embeddings_${evaluate.experiment_id}.h5"
   image_size: 224
   pretrained: True
   openset_n_train: 2000
   openset_n_val: 200
   closedset_n_train: 50000
-  embedding_size: 1280
-temp-scaling:
-  experiment_id: "seesaw_04_02_2024"
-unknown-fine-tune:
-  experiment_id: "seesaw_04_02_2024"
-  epochs: 200
-  lr: 8e-5
-  batch_size: 128
-  early_stop_thresh: 10
-  loss_function: "seesaw"
-  use_lr_finder: False
-  lr_scheduler: "reducelronplateau"
-  lr_scheduler_patience: 5
+  noise_vector_size: 100
+  hidden_dim_g: 64
+  hidden_dim_d: 64
+  openset_label: 0
+  closedset_label: 1
+  embedding_size: 1280  # this is a function of the embedder model; it should be pulled from there somehow
+evaluate:
+  experiment_id: "2024-04-16 unknown fine tune"
+  model_id: "efficientnet_b0"
+  use_timm: False

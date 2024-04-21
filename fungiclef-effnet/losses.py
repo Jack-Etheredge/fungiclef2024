@@ -1,6 +1,15 @@
 import torch
 import torch.nn as nn
-from torch.nn.functional import cross_entropy, one_hot, softmax
+from focal_loss import FocalLoss
+from torch.nn.functional import cross_entropy, one_hot, softmax, log_softmax
+
+# df = pd.read_csv('./metadata/poison_status_list.csv')
+# df[df['poisonous']==1]['class_id'].unique()
+POISONOUS_CLASS_IDS = torch.Tensor([989, 1050, 413, 581, 320, 687, 309, 506, 252, 594, 992,
+                                    586, 689, 52, 35, 688, 1079, 724, 726, 852, 44, 40,
+                                    1332, 25, 286, 728, 42, 50, 43, 358, 263, 45, 445,
+                                    1398, 1179, 843, 796, 281, 1281, 1246, 1311, 968, 1513, 229,
+                                    1312, 211, 20, 307, 842])
 
 
 class SeesawLoss(torch.nn.Module):
@@ -165,3 +174,71 @@ class SupConLoss(nn.Module):
         loss = loss.view(anchor_count, batch_size).mean()
 
         return loss
+
+
+class UnknownLoss(torch.nn.Module):
+
+    def forward(self, model_outs):
+        # modified from https://github.com/RenHuan1999/FungiCLEF2023-UstcAIGroup/blob/main/models/custom_loss.py
+        labels_nov = torch.ones_like(model_outs) / model_outs.shape[1]
+        loss_cls_classes_nov = - (labels_nov * log_softmax(model_outs, dim=1)).sum(dim=-1)
+        return loss_cls_classes_nov.mean()
+
+
+class CompositeLoss(torch.nn.Module):
+
+    def __init__(self, multiclass_loss, use_poison_loss=True, poisonous_class_ids=POISONOUS_CLASS_IDS):
+        super().__init__()
+        self.multiclass_loss = multiclass_loss
+        self.unknown_loss = UnknownLoss()
+        # the penalty is 100x for classifying a poisonous (1) sample as edible (0) vs edible as poisonous
+        # therefore we want to give a 100x weight to misclassifications of poisonous
+        self.softmax = nn.Softmax(dim=-1)
+        self.use_poison_loss = use_poison_loss
+        self.poisonous_class_ids = poisonous_class_ids
+
+    def forward(self, outputs, labels):
+        open_outputs, closed_outputs, _, closed_labels, n_open, n_closed = self.split_open_closed(outputs, labels)
+        if n_closed > 0:
+            if isinstance(self.multiclass_loss, FocalLoss):
+                loss = self.multiclass_loss(self.softmax(closed_outputs), closed_labels)
+            else:
+                loss = self.multiclass_loss(closed_outputs, closed_labels)
+        else:
+            loss = torch.tensor(0.)
+        if n_open > 0:
+            open_loss = self.unknown_loss(open_outputs)
+        else:
+            open_loss = torch.tensor(0.)
+        total_samples = (n_closed + n_open)
+        closed_proportion = n_closed / total_samples
+        open_proportion = n_open / total_samples
+        total_loss = loss * closed_proportion + open_loss * open_proportion
+        if self.use_poison_loss:
+            self.poisonous_class_ids = self.poisonous_class_ids.to(labels.device)
+            softmax_outputs = self.softmax(outputs)
+            poisonous_proba_sum = softmax_outputs[:, self.poisonous_class_ids.int()].sum(-1)
+            edible_proba_sum = softmax_outputs.sum(-1) - poisonous_proba_sum
+            poisonous_outputs = torch.concatenate([edible_proba_sum.unsqueeze(-1), poisonous_proba_sum.unsqueeze(-1)],
+                                                  dim=1)
+            poisonous_labels = torch.isin(labels, self.poisonous_class_ids)
+            class_weight = torch.tensor([1., 100.]).to(labels.device)
+            # TODO: also account for class balance in the class weights
+            poison_loss = cross_entropy(poisonous_outputs, poisonous_labels.type(torch.uint8), weight=class_weight)
+            total_loss = total_loss + poison_loss
+        return total_loss
+
+    @staticmethod
+    def split_open_closed(outputs, labels):
+        """
+        get the open and closed labels and outputs from the labels and outputs to calculate losses separately
+        """
+        closed_indices = labels >= 0
+        open_indices = labels == -1
+        n_closed = closed_indices.sum()
+        n_open = open_indices.sum()
+        closed_labels = labels[closed_indices]
+        open_labels = labels[open_indices]
+        closed_outputs = outputs[closed_indices]
+        open_outputs = outputs[open_indices]
+        return open_outputs, closed_outputs, open_labels, closed_labels, n_open, n_closed

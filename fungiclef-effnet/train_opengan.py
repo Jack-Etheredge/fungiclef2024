@@ -30,7 +30,7 @@ import torch
 from torch.utils.data import Dataset, DataLoader, ConcatDataset
 import torch.nn as nn
 import torch.optim as optim
-import hydra
+from hydra import compose, initialize
 from omegaconf import DictConfig, OmegaConf
 
 import warnings  # ignore warnings
@@ -130,38 +130,38 @@ def train(generator, discriminator, data, criterion, optimizerG, optimizerD, nz,
     return dis_loss, gen_loss, D_x, D_G_z1, D_G_z2
 
 
-@hydra.main(version_base=None, config_path="conf", config_name="config")
-def main(cfg: DictConfig) -> None:
-    print(OmegaConf.to_yaml(cfg))
-    embedder_experiment_id = cfg["open-set-recognition"]["embedder_experiment_id"]
+def train_openganfea(cfg: DictConfig) -> str:
+    embedder_experiment_id = cfg["evaluate"]["experiment_id"]
     openset_embeddings_name = cfg["open-set-recognition"]["openset_embeddings_name"]
     closedset_embeddings_name = cfg["open-set-recognition"]["closedset_embeddings_name"]
-    embedding_size = cfg["open-set-recognition"]["embedding_size"]  # Number of channels in the embedding
+    nc = cfg["open-set-recognition"]["embedding_size"]  # Number of channels in the embedding
     openset_embedding_output_path = EMBEDDINGS_DIR / openset_embeddings_name
     closedset_embedding_output_path = EMBEDDINGS_DIR / closedset_embeddings_name
+    lr_d = cfg["open-set-recognition"]["dlr"]  # learning rate discriminator
+    lr_g = cfg["open-set-recognition"]["glr"]  # learning rate generator
+    seed = cfg["open-set-recognition"]["seed"]
+    num_epochs = cfg["open-set-recognition"]["epochs"]
+    batch_size = cfg["open-set-recognition"]["batch_size"]
+    nz = cfg["open-set-recognition"]["noise_vector_size"]  # Size of z latent vector (i.e. size of generator input)
+    hidden_dim_g = cfg["open-set-recognition"]["hidden_dim_g"]  # Size of feature maps in generator
+    hidden_dim_d = cfg["open-set-recognition"]["hidden_dim_d"]  # Size of feature maps in discriminator
+    openset_label = cfg["open-set-recognition"]["openset_label"]
+    closedset_label = cfg["open-set-recognition"]["closedset_label"]
 
-    # TODO: move these params to hydra
-    exp_dir = Path(
-        '__file__').parent.absolute() / "openset_recognition_discriminators"  # experiment directory, used for reading the init model
-    SEED = 999
-    lr_d = 1e-6  # learning rate discriminator
-    lr_g = 1e-6  # learning rate generator
-    num_epochs = 100  # total number of epoch in training
-    batch_size = 128
-    nc = embedding_size  # Number of channels in the embedding
-    nz = 100  # Size of z latent vector (i.e. size of generator input)
-    hidden_dim_g = 64  # Size of feature maps in generator
-    hidden_dim_d = 64  # Size of feature maps in discriminator
+    # experiment directory, used for reading the init model
+    # TODO: move this to the paths.py module
+    exp_dir = Path('__file__').parent.absolute() / "openset_recognition_discriminators"
+
     n_gpu = 1  # Number of GPUs available. Use 0 for CPU mode.
-    openset_label = 0
-    closedset_label = 1
-    openset_examples = 100
-    project_name = f"{embedder_experiment_id}_dlr_1e-6_glr_1e-6_open{openset_label}closed{closedset_label}"  # we save all the checkpoints in this directory
+
+    # all checkpoints saved to this directory
+    # TODO: move this string construction to hydra
+    project_name = f"{embedder_experiment_id}_dlr_{lr_d:.0e}_glr_{lr_g:.0e}_open{openset_label}closed{closedset_label}"
 
     warnings.filterwarnings("ignore")
     print(sys.version)
     print(torch.__version__)
-    set_seed(SEED)
+    set_seed(seed)
     if not os.path.exists(exp_dir):
         os.makedirs(exp_dir)
     save_dir = os.path.join(exp_dir, project_name)
@@ -188,12 +188,14 @@ def main(cfg: DictConfig) -> None:
 
     print("making closedset dataset")
     closedset_embeddings = get_cached_data(closedset_embedding_output_path)
+    # if n_closed_examples < closedset_embeddings.shape[0]:
+    #     closedset_embeddings = closedset_embeddings[:n_closed_examples, ...]
     closedset_dataset = FeatDataset(data=closedset_embeddings, label=closedset_label)
 
     print("making openset dataset")
     openset_embeddings = get_cached_data(openset_embedding_output_path)
-    if openset_examples < openset_embeddings.shape[0]:
-        openset_embeddings = openset_embeddings[:openset_examples, ...]
+    # if n_open_examples < openset_embeddings.shape[0]:
+    #     openset_embeddings = openset_embeddings[:n_open_examples, ...]
     openset_dataset = FeatDataset(data=openset_embeddings, label=openset_label)
 
     print("combining dataloaders and balancing classes")
@@ -244,6 +246,12 @@ def main(cfg: DictConfig) -> None:
         save_model_state(generator, discriminator, epoch, save_dir)
         save_loss_plots(gen_losses, dis_losses, project_name)
 
+    return project_name
+
 
 if __name__ == "__main__":
-    main()
+    # using this instead of @hydra.main decorator so main function can be called from elsewhere
+    with initialize(version_base=None, config_path="conf", job_name="evaluate"):
+        cfg = compose(config_name="config")
+    print(OmegaConf.to_yaml(cfg))
+    train_openganfea(cfg)

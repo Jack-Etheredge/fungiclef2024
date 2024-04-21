@@ -8,11 +8,10 @@ Choose best discriminator checkpoint for openGANfea
 from pathlib import Path
 
 import torch
-import torchvision
 from sklearn.metrics import roc_auc_score
 from torch.utils.data import Dataset
-import hydra
 import numpy as np
+from hydra import compose, initialize
 from omegaconf import DictConfig, OmegaConf
 from paths import CHECKPOINT_DIR
 from tqdm import tqdm
@@ -25,23 +24,28 @@ from openset_recognition_models import Discriminator
 # os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
 
 
-@hydra.main(version_base=None, config_path="conf", config_name="config")
-def main(cfg: DictConfig) -> None:
-    print(OmegaConf.to_yaml(cfg))
-    # TODO: move the common elements to a config
-    nc = 1280  # pull from hydra
-    hidden_dim = 64
+def choose_best_discriminator(cfg: DictConfig, project_name=None) -> Path:
+    nc = cfg["open-set-recognition"]["embedding_size"]
+    hidden_dim = cfg["open-set-recognition"]["hidden_dim_d"]
     eval_fraction = 0.1
     max_total_examples = 10_000  # TODO: reincorporate this
-    embedder_experiment_id = cfg["open-set-recognition"]["embedder_experiment_id"]
-    openset_label = 0.
-    closedset_label = 1.
-    project_name = f"{embedder_experiment_id}_dlr_1e-6_glr_1e-6_open{int(openset_label)}closed{int(closedset_label)}"  # we save all the checkpoints in this directory
+
+    # select embedder from evaluate experiment_id
+    embedder_experiment_id = cfg["evaluate"]["experiment_id"]
+    model_id = cfg["evaluate"]["model_id"]
+    use_timm = cfg["evaluate"]["use_timm"]
+
+    openset_label = float(cfg["open-set-recognition"]["openset_label"])
+    closedset_label = float(cfg["open-set-recognition"]["closedset_label"])
+    if project_name is None:
+        lr_d = cfg["open-set-recognition"]["lr_d"]  # learning rate discriminator
+        lr_g = cfg["open-set-recognition"]["lr_g"]  # learning rate generator
+        project_name = (f"{embedder_experiment_id}_dlr_{lr_d:.0e}_glr_{lr_g:.0e}"
+                        f"_open{int(openset_label)}closed{int(closedset_label)}")
     exp_dir = Path(
         '__file__').parent.absolute() / "openset_recognition_discriminators"  # experiment directory, used for reading the init model
     discriminator_dir = exp_dir / project_name
 
-    embedder_experiment_id = cfg["open-set-recognition"]["embedder_experiment_id"]
     embedder_layer_offset = cfg["open-set-recognition"]["embedder_layer_offset"]
     batch_size = cfg["open-set-recognition"]["batch_size"]
     n_workers = cfg["open-set-recognition"]["n_workers"]
@@ -59,6 +63,9 @@ def main(cfg: DictConfig) -> None:
     oversample_prop = cfg["train"]["oversample_prop"]
     validation_frac = cfg["train"]["validation_frac"]
 
+    # for data loaders
+    worker_timeout_s = cfg["train"]["worker_timeout_s"]
+
     # for constructing model
     n_classes = cfg["train"]["n_classes"]
 
@@ -71,20 +78,13 @@ def main(cfg: DictConfig) -> None:
     discriminators = [dis for dis in discriminator_dir.iterdir() if
                       dis.suffix == ".pth" and "discriminator" in dis.stem]
 
-    print("constructing embedder (closed set classifier outputting from penultimate layer)")
-    model = build_model(
-        pretrained=pretrained,
-        fine_tune=False,  # we don't need to unfreeze any weights
-        num_classes=n_classes,
-        dropout_rate=0.5,  # doesn't matter since embeddings will be created in eval on a fixed model
-    ).to(device)
     experiment_dir = CHECKPOINT_DIR / embedder_experiment_id
-    experiment_dir.mkdir(parents=True, exist_ok=True)
-    model_file_path = str(experiment_dir / f"model.pth")
-    checkpoint = torch.load(model_file_path)
-    model.load_state_dict(checkpoint['model_state_dict'])
-    model.eval()
-    feature_extractor = torch.nn.Sequential(*list(model.children())[:embedder_layer_offset])
+    if not experiment_dir.exists():
+        raise ValueError(f"no checkpoint directory for embedder at {experiment_dir}")
+
+    print("constructing embedder (closed set classifier outputting from penultimate layer)")
+    model = load_model_for_inference(device, experiment_dir, model_id, n_classes, use_timm)
+    feature_extractor = create_feature_extractor_from_model(model, embedder_layer_offset)
 
     # transforms = v2.Compose([
     #     v2.Resize((image_size, image_size), interpolation=InterpolationMode.BILINEAR, antialias=True),
@@ -96,11 +96,11 @@ def main(cfg: DictConfig) -> None:
                                                                         n_train=openset_n_train, n_val=openset_n_val)
     open_set_selection_loader = torch.utils.data.DataLoader(openset_dataset_val, batch_size=batch_size,
                                                             shuffle=False, num_workers=4, collate_fn=collate_fn,
-                                                            timeout=120)  # TODO: move to hydra
+                                                            timeout=worker_timeout_s)
     open_set_evaluation_loader = torch.utils.data.DataLoader(openset_dataset_test, batch_size=batch_size,
                                                              shuffle=False, num_workers=4,
                                                              collate_fn=collate_fn,
-                                                             timeout=120)  # TODO: move to hydra
+                                                             timeout=worker_timeout_s)
     _, closedset_dataset_val, _ = get_datasets(pretrained=pretrained, image_size=image_size,
                                                validation_frac=validation_frac,
                                                oversample=oversample, undersample=undersample,
@@ -109,12 +109,12 @@ def main(cfg: DictConfig) -> None:
     closed_set_selection_loader = torch.utils.data.DataLoader(closedset_dataset_val, batch_size=batch_size,
                                                               shuffle=False, num_workers=4,
                                                               collate_fn=collate_fn,
-                                                              timeout=120)  # TODO: move to hydra
+                                                              timeout=worker_timeout_s)
     closedset_dataset_test = get_closedset_test_dataset(pretrained, image_size)
     closed_set_evaluation_loader = torch.utils.data.DataLoader(closedset_dataset_test, batch_size=batch_size,
                                                                shuffle=False, num_workers=4,
                                                                collate_fn=collate_fn,
-                                                               timeout=120)  # TODO: move to hydra
+                                                               timeout=worker_timeout_s)
 
     # generate embeddings and labels to select the model
     embeddings = []
@@ -167,14 +167,14 @@ def main(cfg: DictConfig) -> None:
     # generate embeddings and labels to evaluate the model
     embeddings = []
     labels = []
-    print("generate closed set embeddings and labels to select the model")
+    print("generate closed set embeddings and labels to evaluate the model on test set")
     for data in tqdm(closed_set_evaluation_loader):
         images, _ = data
         images = images.to(device)
         outputs = feature_extractor(images).detach().cpu().numpy().squeeze()  # squeeze to use MLP instead of CNN
         embeddings.append(outputs)
         labels.extend([closedset_label] * outputs.shape[0])
-    print("generate open set embeddings and labels to select the model")
+    print("generate open set embeddings and labels to evaluate the model on test set")
     for data in tqdm(open_set_evaluation_loader):
         images, _ = data
         images = images.to(device)
@@ -199,17 +199,35 @@ def main(cfg: DictConfig) -> None:
            f"with selection roc-auc {best_rocauc} "
            f"and evaluation roc-auc {eval_rocauc}"))
 
+    print("saving best discriminator to the embedder model directory")
+    torch.save(best_discriminator_model.state_dict(), experiment_dir / "openganfea_model.pth")
+
+
+def load_model_for_inference(device, experiment_dir, model_id, n_classes,
+                             use_timm):
+    model = build_model(
+        pretrained=False,  # doesn't matter since the weights will be updated by the checkpoint
+        fine_tune=False,  # we don't need to unfreeze any weights
+        num_classes=n_classes,
+        dropout_rate=0.5,  # doesn't matter since embeddings will be created in eval on a fixed model
+        model_id=model_id,
+        use_timm=use_timm,
+    ).to(device)
+    model_file_path = str(experiment_dir / f"model.pth")
+    checkpoint = torch.load(model_file_path)
+    model.load_state_dict(checkpoint['model_state_dict'])
+    model.eval()
+    return model
+
+
+def create_feature_extractor_from_model(model, embedder_layer_offset):
+    feature_extractor = torch.nn.Sequential(*list(model.children())[:embedder_layer_offset])
+    return feature_extractor
+
 
 if __name__ == "__main__":
-    main()
-    # discriminator only:
-    # best discriminator: seesaw_04_02_2024_dlr_1e-6_open1closed0_no_gen/epoch-11-discriminator.pth
-    #   selection roc-auc 0.6117849906483791 and evaluation roc-auc 0.5604385963920865
-    # GAN open 1 closed 0:
-    # best discriminator: seesaw_04_02_2024_dlr_1e-6_open1closed0/epoch-10-discriminator.pth
-    #   selection roc-auc 0.6020331982543641 and evaluation roc-auc 0.5775920077303734
-    # GAN open 0 closed 1:
-    # best discriminator: seesaw_04_02_2024_dlr_1e-6_glr_1e-6_open0closed1/epoch-20-discriminator.pth
-    #   selection roc-auc 0.6231694201995013 and evaluation roc-auc 0.6029468184269686
-    # softmax thresholding (overly optimistic; set threshold on the test set): roc-auc 0.5447452440605403
-    # temp scaled softmax thresholding (overly optimistic; set threshold on the test set): roc-auc 0.544770863626587
+    # using this instead of @hydra.main decorator so main function can be called from elsewhere
+    with initialize(version_base=None, config_path="conf", job_name="evaluate"):
+        cfg = compose(config_name="config")
+    print(OmegaConf.to_yaml(cfg))
+    choose_best_discriminator(cfg)
