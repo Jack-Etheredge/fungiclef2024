@@ -31,31 +31,27 @@ train:
   lr_scheduler: "reducelronplateau"
   lr_scheduler_patience: 4
 open-set-recognition:
-  embedder_experiment_id: "seesaw_04_02_2024"
   embedder_layer_offset: -1
-  dlr: 1e-5
-  glr: 1e-5
+  dlr: 1e-6
+  glr: 1e-6
+  seed: 999
   batch_size: 128
   n_workers: 16
-  openset_embeddings_name: "openset_embeddings_${open-set-recognition.embedder_experiment_id}.h5"
-  closedset_embeddings_name: "closedset_embeddings_${open-set-recognition.embedder_experiment_id}.h5"
+  epochs: 100
+  openset_embeddings_name: "openset_embeddings_${evaluate.experiment_id}.h5"
+  closedset_embeddings_name: "closedset_embeddings_${evaluate.experiment_id}.h5"
   image_size: 224
   pretrained: True
   openset_n_train: 2000
   openset_n_val: 200
   closedset_n_train: 50000
-  embedding_size: 1280
+  noise_vector_size: 100
+  hidden_dim_g: 64
+  hidden_dim_d: 64
+  openset_label: 0
+  closedset_label: 1
+  embedding_size: 1280  # this is a function of the embedder model; it should be pulled from there somehow
 evaluate:
-  experiment_id: "2024-04-16 unknown fine tune"
+  experiment_id: "2024-04-16-no-fine-tuning"
   model_id: "efficientnet_b0"
   use_timm: False
-unknown-fine-tune:
-  experiment_id: "seesaw_04_02_2024"
-  epochs: 200
-  lr: 8e-5
-  batch_size: 128
-  early_stop_thresh: 10
-  loss_function: "seesaw"
-  use_lr_finder: False
-  lr_scheduler: "reducelronplateau"
-  lr_scheduler_patience: 4

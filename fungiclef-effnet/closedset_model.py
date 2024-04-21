@@ -52,7 +52,7 @@ def build_model(model_id='efficientnet_b0', pretrained=True, fine_tune=True, num
         # efficientnetv2_s
     else:
         model = models.efficientnet_b0(weights='DEFAULT' if pretrained else None)
-    # model = models.efficientnet_v2_s(weights='DEFAULT' if pretrained else None)
+        # model = models.efficientnet_v2_s(weights='DEFAULT' if pretrained else None)
     if fine_tune:
         print('[INFO]: Fine-tuning all layers...')
         for params in model.parameters():

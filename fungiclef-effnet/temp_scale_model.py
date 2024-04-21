@@ -59,7 +59,7 @@ def create_temperature_scaled_model(cfg: DictConfig) -> None:
 
 
 if __name__ == "__main__":
-    # using this instead of @hydra.main decorator so create_temperature_scaled_model can be called from elsewhere
+    # using this instead of @hydra.main decorator so main function can be called from elsewhere
     with initialize(version_base=None, config_path="conf", job_name="evaluate"):
         cfg = compose(config_name="config")
     print(OmegaConf.to_yaml(cfg))
