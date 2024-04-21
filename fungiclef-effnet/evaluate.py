@@ -48,6 +48,21 @@ def get_threshold(max_prob_list, k):
     return min_th
 
 
+def get_penultimate_layer_output(model, image):
+    penultimate_layer_output = None
+    
+    def get_input():
+        def hook(model, input, output):
+            penultimate_layer_output = input[0].detach()
+
+        return hook
+
+    model.classifier.register_forward_hook(get_input())
+    outputs = model(image)
+
+    return outputs, penultimate_layer_output
+
+
 class PytorchWorker:
     """Run inference using PyTorch."""
 
@@ -190,7 +205,6 @@ def evaluate_experiment(cfg, experiment_id, temperature_scaling=False, opengan=F
             cfg=cfg,
         )
 
-    # TODO: logic is fundamentally different for openGAN evaluation since no thresholds are needed
     if opengan:
         openset_label = cfg["open-set-recognition"]["openset_label"]
         metrics_output_csv_path = str(experiment_dir / "threshold_scores_opengan.csv")
@@ -364,16 +378,16 @@ if __name__ == "__main__":
     use_timm = cfg["evaluate"]["use_timm"]
     model_id = cfg["evaluate"]["model_id"]
 
-    # outputs_precomputed = True
-    # print(f"evaluating experiment {experiment_id}")
-    # evaluate_experiment(cfg=cfg, experiment_id=experiment_id, from_outputs=outputs_precomputed)
-    # print("creating temperature scaled model")
-    # create_temperature_scaled_model(cfg)
-    # print(f"evaluating experiment {experiment_id} with temperature scaling")
-    # evaluate_experiment(cfg=cfg, experiment_id=experiment_id, temperature_scaling=True,
-    #                     from_outputs=outputs_precomputed)
+    outputs_precomputed = True
+    print(f"evaluating experiment {experiment_id}")
+    evaluate_experiment(cfg=cfg, experiment_id=experiment_id, from_outputs=outputs_precomputed)
+    print("creating temperature scaled model")
+    create_temperature_scaled_model(cfg)
+    print(f"evaluating experiment {experiment_id} with temperature scaling")
+    evaluate_experiment(cfg=cfg, experiment_id=experiment_id, temperature_scaling=True,
+                        from_outputs=outputs_precomputed)
     outputs_precomputed = False
     print("training openGAN model")
-    # train_and_select_discriminator(cfg)
+    train_and_select_discriminator(cfg)
     print(f"evaluating experiment {experiment_id} with openGAN")
     evaluate_experiment(cfg=cfg, experiment_id=experiment_id, opengan=True, from_outputs=outputs_precomputed)

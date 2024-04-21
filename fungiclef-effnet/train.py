@@ -139,6 +139,8 @@ def create_scheduler_and_optimizer(model, lr, weight_decay, lr_scheduler, lr_sch
 @hydra.main(version_base=None, config_path="conf", config_name="config")
 def train_model(cfg: DictConfig) -> None:
     print(OmegaConf.to_yaml(cfg))
+    model_id = cfg["train"]["model_id"]
+    use_timm = cfg["train"]["use_timm"]
     epochs = cfg["train"]["epochs"]
     lr = cfg["train"]["lr"]
     pretrained = cfg["train"]["pretrained"]
@@ -210,10 +212,12 @@ def train_model(cfg: DictConfig) -> None:
     print(f"Epochs to train for: {epochs}\n")
 
     model = build_model(
+        model_id=model_id,
         pretrained=pretrained,
         fine_tune=not fine_tune_after_n_epochs or skip_frozen_epochs_load_failed_model,
         num_classes=n_classes,
         dropout_rate=dropout_rate,
+        use_timm=use_timm,
     ).to(device)
 
     # TODO: refine/replace this logic
