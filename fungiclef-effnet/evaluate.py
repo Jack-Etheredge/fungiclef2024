@@ -125,10 +125,10 @@ def make_submission(test_metadata, model_path, output_csv_path, images_root_path
                 image_path = os.path.join(images_root_path, image_path)
                 test_image = Image.open(image_path).convert("RGB")
                 if opengan:
-                    pred, proba = model(TRANSFORMS(test_image).unsqueeze(0).to(device)).item()
+                    pred, proba = model(TRANSFORMS(test_image).unsqueeze(0).to(device))
                     # TODO: .item() solution is brittle and won't work once multiple images are fed in a batch
-                    max_probas.append(proba.item())
                     predictions.append(pred.item())
+                    max_probas.append(proba.item())
                 else:
                     logits = model.predict_image(test_image)
                     probas = softmax(logits)
@@ -143,8 +143,8 @@ def make_submission(test_metadata, model_path, output_csv_path, images_root_path
 
     test_metadata.loc[:, "class_id"] = predictions
     if opengan:
-        test_metadata.loc[:, "opengan_proba"] = max_probas
-        keep_cols = ["observation_id", "class_id", "opengan_proba"]
+        test_metadata.loc[:, "max_proba"] = max_probas
+        keep_cols = ["observation_id", "class_id", "max_proba"]
     else:
         test_metadata.loc[:, "max_proba"] = max_probas
         test_metadata.loc[:, "entropy"] = entropy_scores
@@ -161,11 +161,8 @@ def evaluate_experiment(cfg, experiment_id, temperature_scaling=False, opengan=F
     ext = "_opengan" if opengan else ""
     ext += "_ts" if temperature_scaling else ""
     predictions_output_csv_path = str(experiment_dir / f"submission_fine_tuned_thresholding{ext}.csv")
-    if opengan:
-        predictions_with_unknown_output_csv_path = predictions_output_csv_path
-    else:
-        predictions_with_unknown_output_csv_path = str(
-            experiment_dir / f"submission_with_unknowns_fine_tuned_thresholding{ext}.csv")
+    predictions_with_unknown_output_csv_path = str(
+        experiment_dir / f"submission_with_unknowns_fine_tuned_thresholding{ext}.csv")
 
     data_dir = Path('__file__').parent.absolute().parent / "data" / "DF21"
     metadata_file_path = "../metadata/FungiCLEF2023_val_metadata_PRODUCTION.csv"
@@ -195,20 +192,25 @@ def evaluate_experiment(cfg, experiment_id, temperature_scaling=False, opengan=F
 
     # TODO: logic is fundamentally different for openGAN evaluation since no thresholds are needed
     if opengan:
-        scores_output_path = str(experiment_dir / f"competition_metrics_scores_opengan.json")
-
+        openset_label = cfg["open-set-recognition"]["openset_label"]
+        metrics_output_csv_path = str(experiment_dir / "threshold_scores_opengan.csv")
+        scores_output_path = str(experiment_dir / "competition_metrics_scores_opengan.json")
+        best_threshold_path = str(experiment_dir / "best_threshold_opengan.txt")
         # Generate metrics from predictions
         test_metadata.rename(columns={"observationID": "observation_id"}, inplace=True)
         test_metadata.drop_duplicates("observation_id", keep="first", inplace=True)
         y_true = test_metadata["class_id"].values
         submission_df = pd.read_csv(predictions_output_csv_path)
         submission_df.drop_duplicates("observation_id", keep="first", inplace=True)
-        y_pred = np.copy(submission_df["class_id"].values)
-
-        # TODO: deduplicate logic
-        # best_threshold = set_best_threshold()
-
-        homebrewed_scores = calc_homebrewed_scores(y_true, y_pred, y_pred)
+        y_proba = submission_df["max_proba"].values if openset_label == 0 else -submission_df["max_proba"].values
+        threshold_range = np.arange(y_proba.min(), y_proba.max(), 0.01)
+        best_threshold = get_best_threshold(metrics_output_csv_path, submission_df, threshold_range, y_proba,
+                                            y_true)
+        with open(best_threshold_path, 'w') as f:
+            f.write(str(best_threshold))
+        homebrewed_scores = create_homebrwed_scores_and_save_predictions_csv(best_threshold,
+                                                                             predictions_with_unknown_output_csv_path,
+                                                                             submission_df, y_proba, y_true)
         save_metrics(homebrewed_scores, metadata_file_path, predictions_with_unknown_output_csv_path,
                      scores_output_path)
 
@@ -218,6 +220,7 @@ def evaluate_experiment(cfg, experiment_id, temperature_scaling=False, opengan=F
             ext += thresholding_method
             metrics_output_csv_path = str(experiment_dir / f"threshold_scores{ext}.csv")
             scores_output_path = str(experiment_dir / f"competition_metrics_scores{ext}.json")
+            best_threshold_path = str(experiment_dir / f"best_threshold{ext}.txt")
 
             # Generate metrics from predictions
             test_metadata.rename(columns={"observationID": "observation_id"}, inplace=True)
@@ -236,56 +239,66 @@ def evaluate_experiment(cfg, experiment_id, temperature_scaling=False, opengan=F
             else:
                 raise ValueError(f"unrecognized thresholding method {thresholding_method}")
 
-            scores = []
-            thresholds = []
-
-            y_pred = np.copy(submission_df["class_id"].values)
-            best_threshold, threshold = None, None
-            score = f1_score(y_true, y_pred, average='macro')
-            best_f1 = score
-            thresholds.append(threshold)
-            scores.append(score)
-            print(threshold, score)
-
-            for threshold in threshold_range:
-                y_pred = np.copy(submission_df["class_id"].values)
-                y_pred[y_proba < threshold] = -1
-                score = f1_score(y_true, y_pred, average='macro')
-                if score > best_f1:
-                    best_f1 = score
-                    best_threshold = threshold
-                print(threshold, score)
-                thresholds.append(threshold)
-                scores.append(score)
-            for k in [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2]:
-                threshold = get_threshold(y_proba, k)
-                y_pred = np.copy(submission_df["class_id"].values)
-                y_pred[y_proba < threshold] = -1
-                score = f1_score(y_true, y_pred, average='macro')
-                if score > best_f1:
-                    best_f1 = score
-                    best_threshold = threshold
-                print(f"iqr_k{k}", threshold, score)
-                thresholds.append(threshold)
-                scores.append(score)
-            threshold_scores = pd.DataFrame()
-            threshold_scores['threshold'] = thresholds
-            threshold_scores['f1'] = scores
-            threshold_scores.sort_values('f1').to_csv(metrics_output_csv_path, index=False)
-
-            # reset y_pred and create y_pred_w_unknown using the best threshold before calculating homebrewed_scores
-            y_pred = np.copy(submission_df["class_id"].values)
-            y_pred_w_unknown = y_pred.copy()
-            y_pred_w_unknown[y_proba < best_threshold] = -1
-            print("best threshold")
-            homebrewed_scores = calc_homebrewed_scores(y_true, y_pred, y_pred_w_unknown)
-
-            # make and save the unknown output csv
-            submission_df.loc[:, "class_id"] = y_pred_w_unknown
-            submission_df.to_csv(predictions_with_unknown_output_csv_path, index=False)
-
+            best_threshold = get_best_threshold(metrics_output_csv_path, submission_df, threshold_range, y_proba,
+                                                y_true)
+            with open(best_threshold_path, 'w') as f:
+                f.write(str(best_threshold))
+            homebrewed_scores = create_homebrwed_scores_and_save_predictions_csv(best_threshold,
+                                                                                 predictions_with_unknown_output_csv_path,
+                                                                                 submission_df, y_proba, y_true)
             save_metrics(homebrewed_scores, metadata_file_path, predictions_with_unknown_output_csv_path,
                          scores_output_path)
+
+
+def create_homebrwed_scores_and_save_predictions_csv(best_threshold, predictions_with_unknown_output_csv_path,
+                                                     submission_df, y_proba, y_true):
+    # reset y_pred and create y_pred_w_unknown using the best threshold before calculating homebrewed_scores
+    y_pred = np.copy(submission_df["class_id"].values)
+    y_pred_w_unknown = y_pred.copy()
+    y_pred_w_unknown[y_proba < best_threshold] = -1
+    homebrewed_scores = calc_homebrewed_scores(y_true, y_pred, y_pred_w_unknown)
+    # make and save the unknown output csv
+    submission_df.loc[:, "class_id"] = y_pred_w_unknown
+    submission_df.to_csv(predictions_with_unknown_output_csv_path, index=False)
+    return homebrewed_scores
+
+
+def get_best_threshold(metrics_output_csv_path, submission_df, threshold_range, y_proba, y_true):
+    scores = []
+    thresholds = []
+    y_pred = np.copy(submission_df["class_id"].values)
+    best_threshold, threshold = None, None
+    score = f1_score(y_true, y_pred, average='macro')
+    best_f1 = score
+    thresholds.append(threshold)
+    scores.append(score)
+    print(threshold, score)
+    for threshold in threshold_range:
+        y_pred = np.copy(submission_df["class_id"].values)
+        y_pred[y_proba < threshold] = -1
+        score = f1_score(y_true, y_pred, average='macro')
+        if score > best_f1:
+            best_f1 = score
+            best_threshold = threshold
+        print(threshold, score)
+        thresholds.append(threshold)
+        scores.append(score)
+    for k in [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2]:
+        threshold = get_threshold(y_proba, k)
+        y_pred = np.copy(submission_df["class_id"].values)
+        y_pred[y_proba < threshold] = -1
+        score = f1_score(y_true, y_pred, average='macro')
+        if score > best_f1:
+            best_f1 = score
+            best_threshold = threshold
+        print(f"iqr_k{k}", threshold, score)
+        thresholds.append(threshold)
+        scores.append(score)
+    threshold_scores = pd.DataFrame()
+    threshold_scores['threshold'] = thresholds
+    threshold_scores['f1'] = scores
+    threshold_scores.sort_values('f1').to_csv(metrics_output_csv_path, index=False)
+    return best_threshold
 
 
 def save_metrics(homebrewed_scores, metadata_file_path, predictions_with_unknown_output_csv_path, scores_output_path):
@@ -351,17 +364,16 @@ if __name__ == "__main__":
     use_timm = cfg["evaluate"]["use_timm"]
     model_id = cfg["evaluate"]["model_id"]
 
-    outputs_precomputed = True
-    print(f"evaluating experiment {experiment_id}")
-    evaluate_experiment(cfg=cfg, experiment_id=experiment_id, from_outputs=outputs_precomputed)
-    print("creating temperature scaled model")
-    create_temperature_scaled_model(cfg)
-    print(f"evaluating experiment {experiment_id} with temperature scaling")
-    evaluate_experiment(cfg=cfg, experiment_id=experiment_id, temperature_scaling=True,
-                        from_outputs=outputs_precomputed)
-
-    # outputs_precomputed = False
-    # print("training openGAN model")
-    # # train_and_select_discriminator(cfg)
-    # print(f"evaluating experiment {experiment_id} with openGAN")
-    # evaluate_experiment(cfg=cfg, experiment_id=experiment_id, opengan=True, from_outputs=outputs_precomputed)
+    # outputs_precomputed = True
+    # print(f"evaluating experiment {experiment_id}")
+    # evaluate_experiment(cfg=cfg, experiment_id=experiment_id, from_outputs=outputs_precomputed)
+    # print("creating temperature scaled model")
+    # create_temperature_scaled_model(cfg)
+    # print(f"evaluating experiment {experiment_id} with temperature scaling")
+    # evaluate_experiment(cfg=cfg, experiment_id=experiment_id, temperature_scaling=True,
+    #                     from_outputs=outputs_precomputed)
+    outputs_precomputed = False
+    print("training openGAN model")
+    # train_and_select_discriminator(cfg)
+    print(f"evaluating experiment {experiment_id} with openGAN")
+    evaluate_experiment(cfg=cfg, experiment_id=experiment_id, opengan=True, from_outputs=outputs_precomputed)
