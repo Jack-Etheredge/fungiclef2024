@@ -19,6 +19,7 @@ from scipy.stats import entropy
 from closedset_model import build_model
 from competition_metrics import evaluate
 from create_opengan_discriminator import train_and_select_discriminator, create_composite_model
+from paths import METADATA_DIR, VAL_DATA_DIR
 from temperature_scaling import ModelWithTemperature
 from temp_scale_model import create_temperature_scaled_model
 
@@ -50,7 +51,7 @@ def get_threshold(max_prob_list, k):
 
 def get_penultimate_layer_output(model, image):
     penultimate_layer_output = None
-    
+
     def get_input():
         def hook(model, input, output):
             penultimate_layer_output = input[0].detach()
@@ -68,13 +69,19 @@ class PytorchWorker:
 
     def __init__(self, model_path: str, number_of_categories: int = 1604, temp_scaling=False,
                  model_id="efficientnet_b0", use_timm=True, device="cpu"):
-        self.number_of_categories = number_of_categories  # must be set before calling _load_model
-        self.temp_scaling = temp_scaling  # must be set before calling _load_model
-        self.model_id = model_id  # must be set before calling _load_model
-        self.use_timm = use_timm  # must be set before calling _load_model
-        self.model = self._load_model(model_path)
-        self.transforms = TRANSFORMS
+
+        ########################################
+        # must be set before calling _load_model
+        self.number_of_categories = number_of_categories
+        self.temp_scaling = temp_scaling
+        self.model_id = model_id
+        self.use_timm = use_timm
         self.device = device
+        ########################################
+
+        self.transforms = TRANSFORMS
+        # most other attributes must be set before calling _load_model, so call last
+        self.model = self._load_model(model_path)
 
     def _load_model(self, model_path):
         print("Setting up Pytorch Model")
@@ -179,8 +186,7 @@ def evaluate_experiment(cfg, experiment_id, temperature_scaling=False, opengan=F
     predictions_with_unknown_output_csv_path = str(
         experiment_dir / f"submission_with_unknowns_fine_tuned_thresholding{ext}.csv")
 
-    data_dir = Path('__file__').parent.absolute().parent / "data" / "DF21"
-    metadata_file_path = "../metadata/FungiCLEF2023_val_metadata_PRODUCTION.csv"
+    metadata_file_path = METADATA_DIR / "FungiCLEF2023_val_metadata_PRODUCTION.csv"
     test_metadata = pd.read_csv(metadata_file_path)
 
     # TODO: set thresholds on val
@@ -196,7 +202,7 @@ def evaluate_experiment(cfg, experiment_id, temperature_scaling=False, opengan=F
         make_submission(
             test_metadata=test_metadata,
             model_path=model_path,
-            images_root_path=data_dir,
+            images_root_path=VAL_DATA_DIR,
             output_csv_path=predictions_output_csv_path,
             temp_scaling=temperature_scaling,
             opengan=opengan,
@@ -378,7 +384,7 @@ if __name__ == "__main__":
     use_timm = cfg["evaluate"]["use_timm"]
     model_id = cfg["evaluate"]["model_id"]
 
-    outputs_precomputed = True
+    outputs_precomputed = False
     print(f"evaluating experiment {experiment_id}")
     evaluate_experiment(cfg=cfg, experiment_id=experiment_id, from_outputs=outputs_precomputed)
     print("creating temperature scaled model")
@@ -386,7 +392,6 @@ if __name__ == "__main__":
     print(f"evaluating experiment {experiment_id} with temperature scaling")
     evaluate_experiment(cfg=cfg, experiment_id=experiment_id, temperature_scaling=True,
                         from_outputs=outputs_precomputed)
-    outputs_precomputed = False
     print("training openGAN model")
     train_and_select_discriminator(cfg)
     print(f"evaluating experiment {experiment_id} with openGAN")
