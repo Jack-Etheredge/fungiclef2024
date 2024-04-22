@@ -231,6 +231,13 @@ def train_model(cfg: DictConfig) -> None:
         model.load_state_dict(checkpoint['model_state_dict'])
         optimizer, scheduler = create_scheduler_and_optimizer(model, lr, weight_decay, lr_scheduler,
                                                               lr_scheduler_patience)
+        # Start epoch counter from the checkpoint epoch and set the validation loss so that the model checkpoint isn't
+        #   automatically updated on the first epoch after resuming training.
+        # There are edge cases where this behavior might not be desired such as fine-tuning with a different
+        #   loss function and/or dataset such that the validation loss increases but still represents model improvement.
+        best_validation_loss = checkpoint['validation_loss']
+        best_epoch = checkpoint['epoch']
+        start_epoch = best_epoch + 1
         try:
             optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
             optimizer.param_groups[0]["lr"] = lr
@@ -239,6 +246,8 @@ def train_model(cfg: DictConfig) -> None:
             print(f"unable to load optimizer state due to {e}")
         model.to(device)
     else:
+        best_validation_loss = float("inf")
+        best_epoch, start_epoch = 0, 0
         optimizer, scheduler = create_scheduler_and_optimizer(model, lr, weight_decay, lr_scheduler,
                                                               lr_scheduler_patience)
         print(f"training new model: {experiment_id}")
@@ -273,11 +282,9 @@ def train_model(cfg: DictConfig) -> None:
     # Lists to keep track of losses and accuracies.
     train_loss, valid_loss = [], []
     train_acc, valid_acc = [], []
-    best_validation_loss = float("inf")
-    best_epoch = 0
     # Start the training.
     unfrozen = fine_tune_after_n_epochs == 0
-    for epoch in range(epochs):
+    for epoch in range(start_epoch, epochs):
 
         if (not unfrozen and (skip_frozen_epochs_load_failed_model or
                               epoch + 1 > fine_tune_after_n_epochs)):
@@ -338,7 +345,7 @@ def train_model(cfg: DictConfig) -> None:
             best_validation_loss = valid_epoch_loss
             best_epoch = epoch
             print("updating best model")
-            checkpoint_model(epoch + 1, model, optimizer, criterion, valid_epoch_loss, model_file_path)
+            checkpoint_model(epoch, model, optimizer, criterion, valid_epoch_loss, model_file_path)
             print(">> successfully updated best model <<")
         elif epoch - best_epoch > early_stop_thresh:
             print(f"Early stopped training at epoch {epoch + 1}")
@@ -354,7 +361,7 @@ def train_model(cfg: DictConfig) -> None:
     print('TRAINING COMPLETE')
 
     print('evaluating')
-    evaluate_experiment(experiment_id=experiment_id)
+    evaluate_experiment(cfg, experiment_id)
     print('EVALUATION COMPLETE')
 
 
