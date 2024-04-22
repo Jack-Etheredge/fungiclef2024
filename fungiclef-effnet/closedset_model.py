@@ -72,6 +72,19 @@ def build_model(model_id='tf_efficientnetv2_s.in21k', pretrained=True, fine_tune
     return model
 
 
+def get_embedding_size(model_id='tf_efficientnetv2_s.in21k', use_timm=True):
+    """
+    Unfortunately some early experiments were run without timm and the state dict keys don't match.
+    """
+    if use_timm:
+        model = timm.create_model(model_id, pretrained=False)
+    else:
+        print(("WARNING: this is a legacy option for evaluation of some of the earliest trained models in this repo."
+               "Make sure this is what you wanted to do."))
+        model = models.efficientnet_b0(weights=None)
+    return model.classifier.in_features
+
+
 def unfreeze_model(model):
     for params in model.parameters():
         params.requires_grad = True

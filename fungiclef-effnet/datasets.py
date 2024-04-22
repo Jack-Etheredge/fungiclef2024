@@ -19,17 +19,18 @@ from imblearn.over_sampling import RandomOverSampler
 from imblearn.under_sampling import RandomUnderSampler
 from sklearn.model_selection import train_test_split
 from torchvision import transforms
+from torchvision.datasets import ImageFolder
 from torchvision.transforms import v2
 from torch.utils.data import DataLoader, Dataset, Subset, ConcatDataset
 from torchvision.transforms.v2 import InterpolationMode
+
+from paths import DATA_DIR, DATA_FROM_FOLDER_DIR, METADATA_DIR
 
 # dataset loading issue
 # https://github.com/eriklindernoren/PyTorch-YOLOv3/issues/162
 Image.MAX_IMAGE_PIXELS = None
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 WORKER_TIMEOUT_SECS = 120
-DATA_DIR = Path('__file__').parent.absolute().parent / 'data'
-METADATA_DIR = Path('__file__').parent.absolute().parent / 'metadata'
 
 
 # Training transforms
@@ -168,7 +169,9 @@ class CustomImageDataset(Dataset):
             img_path = os.path.join(self.img_dir, self.img_labels.iloc[idx, 0])
             # from torchvision.io import read_image
             # image = read_image(img_path)
-            image = Image.open(img_path).convert('RGB')  # hopefully this handles greyscale cases
+            # https://pytorch.org/vision/main/_modules/torchvision/datasets/folder.html#ImageFolder
+            with open(img_path, "rb") as f:
+                image = Image.open(f).convert('RGB')  # hopefully this handles greyscale cases
             # image = transforms.ToPILImage()(cv2.cvtColor(cv2.imread(img_path), cv2.COLOR_BGR2RGB))
             label = self.img_labels.iloc[idx, 1]
             if self.transform:
@@ -188,7 +191,8 @@ def collate_fn(batch):
     return torch.utils.data.dataloader.default_collate(batch)
 
 
-def get_data_loaders(train_dataset, val_dataset, batch_size, num_workers, balanced_sampler):
+def get_data_loaders(train_dataset, val_dataset, batch_size, num_workers, balanced_sampler,
+                     timeout=WORKER_TIMEOUT_SECS):
     """
     Prepares the training and validation data loaders.
     :param train_dataset: The training dataset.
@@ -216,7 +220,7 @@ def get_data_loaders(train_dataset, val_dataset, batch_size, num_workers, balanc
                                   num_workers=num_workers,
                                   # pin_memory=True,
                                   # pin_memory_device=device,
-                                  timeout=WORKER_TIMEOUT_SECS,
+                                  timeout=timeout,
                                   persistent_workers=True,
                                   collate_fn=collate_fn,
                                   )
@@ -227,7 +231,7 @@ def get_data_loaders(train_dataset, val_dataset, batch_size, num_workers, balanc
             shuffle=True, num_workers=num_workers,
             # pin_memory=True,
             # pin_memory_device=device,
-            timeout=WORKER_TIMEOUT_SECS,
+            timeout=timeout,
             persistent_workers=True,
             collate_fn=collate_fn,
         )
@@ -236,7 +240,7 @@ def get_data_loaders(train_dataset, val_dataset, batch_size, num_workers, balanc
         shuffle=False, num_workers=num_workers,
         # pin_memory=True,
         # pin_memory_device=device,
-        timeout=WORKER_TIMEOUT_SECS,
+        timeout=timeout,
         persistent_workers=True,
         collate_fn=collate_fn,
     )
@@ -298,7 +302,8 @@ def get_closedset_test_dataset(pretrained, image_size):
     return val_test_dataset
 
 
-def get_dataloader_combine_and_balance_datasets(dataset_1, dataset_2, batch_size, num_workers=16, timeout=120,
+def get_dataloader_combine_and_balance_datasets(dataset_1, dataset_2, batch_size, num_workers=16,
+                                                timeout=WORKER_TIMEOUT_SECS,
                                                 persistent_workers=True, unknowns=False):
     """
     https://pytorch.org/docs/stable/data.html
@@ -320,3 +325,42 @@ def get_dataloader_combine_and_balance_datasets(dataset_1, dataset_2, batch_size
                             persistent_workers=persistent_workers,
                             )
     return dataloader
+
+# the imagefolder dataset will sort by class then filename, so for data splitting purposes, we can sort the
+# image_path per class and get back the order in the dataset
+# full_dataset = ImageFolder(root=DATA_FROM_FOLDER_DIR)
+# def get_openset_datasets(pretrained, image_size, n_train=2000, n_val=200, seed=42):
+#     """
+#     Function to prepare the Datasets.
+#     :param pretrained: Boolean, True or False.
+#     Returns the training, validation, and test sets for the openset dataset.
+#     """
+#
+#     # TODO: revisit the idea of training transformations for the open set discriminator training
+#
+#     # set up the dataset twice but with different transformations
+#     train_dataset = CustomImageDataset(
+#         label_file_path=METADATA_DIR / "FungiCLEF2023_val_metadata_PRODUCTION.csv",
+#         img_dir=DATA_DIR / "DF21",
+#         keep_only={-1},
+#         transform=(get_train_transform(image_size, pretrained))
+#     )
+#     val_test_dataset = CustomImageDataset(
+#         label_file_path=METADATA_DIR / "FungiCLEF2023_val_metadata_PRODUCTION.csv",
+#         img_dir=DATA_DIR / "DF21",
+#         keep_only={-1},
+#         transform=(get_valid_transform(image_size, pretrained))  # this is the difference
+#     )
+#
+#     indices = list(range(train_dataset.target.shape[0]))
+#     test_indices, train_indices = train_test_split(indices, test_size=n_train, random_state=seed)
+#     test_indices, val_indices = train_test_split(test_indices, test_size=n_val, random_state=seed)
+#
+#     train_dataset = Subset(train_dataset, indices=train_indices)
+#     val_dataset = Subset(val_test_dataset, indices=val_indices)
+#     test_dataset = Subset(val_test_dataset, indices=test_indices)
+#     train_dataset.target = np.array([-1] * len(train_dataset))
+#     val_dataset.target = np.array([-1] * len(val_dataset))
+#     test_dataset.target = np.array([-1] * len(test_dataset))
+#
+#     return train_dataset, val_dataset, test_dataset

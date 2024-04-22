@@ -17,6 +17,7 @@ fc (64*4→64*2), BN, LeakyReLU,
 fc (64*2→64*4), BN, LeakyReLU, fc
 (64*4→D), Tanh.
 """
+# TODO: merge this with train_opengan since it's the same script just without the generator
 
 import os
 import copy
@@ -37,6 +38,7 @@ import warnings  # ignore warnings
 
 from utils import set_seed, build_models, save_discriminator_loss_plot
 from paths import EMBEDDINGS_DIR
+from closedset_model import get_embedding_size
 from datasets import get_dataloader_combine_and_balance_datasets
 
 
@@ -111,9 +113,13 @@ def main(cfg: DictConfig) -> None:
     embedder_experiment_id = cfg["evaluate"]["experiment_id"]
     openset_embeddings_name = cfg["open-set-recognition"]["openset_embeddings_name"]
     closedset_embeddings_name = cfg["open-set-recognition"]["closedset_embeddings_name"]
-    embedding_size = cfg["open-set-recognition"]["embedding_size"]  # Number of channels in the embedding
     openset_embedding_output_path = EMBEDDINGS_DIR / openset_embeddings_name
     closedset_embedding_output_path = EMBEDDINGS_DIR / closedset_embeddings_name
+
+    model_id = cfg["evaluate"]["model_id"]
+    use_timm = cfg["evaluate"]["use_timm"]
+    # get embedding size from the trained evaluation (embedder) model
+    nc = get_embedding_size(model_id=model_id, use_timm=use_timm)
 
     # TODO: move these params to hydra
     exp_dir = Path(

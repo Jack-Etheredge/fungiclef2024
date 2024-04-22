@@ -6,7 +6,7 @@ train:
   # tf_efficientnetv2_s.in21k
   use_timm: True
   epochs: 200
-  lr: 4.6e-2  # found with lr finder
+  lr: 1.12e-3  # found with lr finder
   use_lr_finder: False
   pretrained: True
   early_stop_thresh: 10
@@ -52,7 +52,6 @@ open-set-recognition:
   hidden_dim_d: 64
   openset_label: 0
   closedset_label: 1
-  embedding_size: 1280  # this is a function of the embedder model; it should be pulled from there somehow
 evaluate:
   experiment_id: "2024-04-16 unknown fine tune"
   model_id: "efficientnet_b0"

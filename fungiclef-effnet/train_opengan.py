@@ -35,6 +35,7 @@ from omegaconf import DictConfig, OmegaConf
 
 import warnings  # ignore warnings
 
+from closedset_model import get_embedding_size
 from utils import set_seed, build_models, save_loss_plots
 from paths import EMBEDDINGS_DIR
 
@@ -134,7 +135,6 @@ def train_openganfea(cfg: DictConfig) -> str:
     embedder_experiment_id = cfg["evaluate"]["experiment_id"]
     openset_embeddings_name = cfg["open-set-recognition"]["openset_embeddings_name"]
     closedset_embeddings_name = cfg["open-set-recognition"]["closedset_embeddings_name"]
-    nc = cfg["open-set-recognition"]["embedding_size"]  # Number of channels in the embedding
     openset_embedding_output_path = EMBEDDINGS_DIR / openset_embeddings_name
     closedset_embedding_output_path = EMBEDDINGS_DIR / closedset_embeddings_name
     lr_d = cfg["open-set-recognition"]["dlr"]  # learning rate discriminator
@@ -147,6 +147,11 @@ def train_openganfea(cfg: DictConfig) -> str:
     hidden_dim_d = cfg["open-set-recognition"]["hidden_dim_d"]  # Size of feature maps in discriminator
     openset_label = cfg["open-set-recognition"]["openset_label"]
     closedset_label = cfg["open-set-recognition"]["closedset_label"]
+
+    # get embedding size from the trained evaluation (embedder) model
+    model_id = cfg["evaluate"]["model_id"]
+    use_timm = cfg["evaluate"]["use_timm"]
+    nc = get_embedding_size(model_id=model_id, use_timm=use_timm)
 
     # experiment directory, used for reading the init model
     # TODO: move this to the paths.py module

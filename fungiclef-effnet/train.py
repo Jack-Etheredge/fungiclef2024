@@ -7,6 +7,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 
+import numpy as np
 from focal_loss.focal_loss import FocalLoss
 import torch
 import torch.nn as nn
@@ -166,6 +167,7 @@ def train_model(cfg: DictConfig) -> None:
     lr_scheduler_patience = cfg["train"]["lr_scheduler_patience"]
     include_unknowns = cfg["train"]["include_unknowns"]
     n_classes = cfg["train"]["n_classes"]
+    worker_timeout_s = cfg["train"]["worker_timeout_s"]
 
     image_size = cfg["open-set-recognition"]["image_size"]
     openset_n_train = cfg["open-set-recognition"]["openset_n_train"]
@@ -204,7 +206,7 @@ def train_model(cfg: DictConfig) -> None:
                                                         openset_n_train, openset_n_val,
                                                         oversample, oversample_prop,
                                                         pretrained, undersample,
-                                                        validation_frac)
+                                                        validation_frac, worker_timeout_s)
 
     device = ('cuda:0' if torch.cuda.is_available() else 'cpu')
     print(f"Computation device: {device}")
@@ -260,9 +262,13 @@ def train_model(cfg: DictConfig) -> None:
 
     if use_lr_finder:
         lr_finder = LRFinder(model, optimizer, criterion, device=device)
-        lr_finder.range_test(train_loader, end_lr=100, num_iter=100)
+        lr_finder.range_test(train_loader, start_lr=1e-6, end_lr=100, num_iter=100)
         lr_finder.plot()  # to inspect the loss-learning rate graph
         lr_finder.reset()  # to reset the model and optimizer to their initial state
+        min_grad_idx = (np.gradient(np.array(lr_finder.history["loss"]))).argmin()
+        lr = lr_finder.history["lr"][min_grad_idx]
+        print(f"Setting LR to {lr} according to LR finder.")
+        optimizer.param_groups[0]["lr"] = lr
 
     # Lists to keep track of losses and accuracies.
     train_loss, valid_loss = [], []
@@ -300,7 +306,7 @@ def train_model(cfg: DictConfig) -> None:
                                                                     include_unknowns, num_dataloader_workers,
                                                                     openset_n_train, openset_n_val, oversample,
                                                                     oversample_prop, pretrained, undersample,
-                                                                    validation_frac)
+                                                                    validation_frac, worker_timeout_s)
 
         recreate_loader = True
         while recreate_loader:
@@ -319,7 +325,7 @@ def train_model(cfg: DictConfig) -> None:
                                                                     include_unknowns, num_dataloader_workers,
                                                                     openset_n_train, openset_n_val, oversample,
                                                                     oversample_prop, pretrained, undersample,
-                                                                    validation_frac)
+                                                                    validation_frac, worker_timeout_s)
 
         train_loss.append(train_epoch_loss)
         valid_loss.append(valid_epoch_loss)
@@ -354,7 +360,7 @@ def train_model(cfg: DictConfig) -> None:
 
 def create_train_val_loaders(balanced_sampler, batch_size, equal_undersampled_val, image_resize, image_size,
                              include_unknowns, num_dataloader_workers, openset_n_train, openset_n_val, oversample,
-                             oversample_prop, pretrained, undersample, validation_frac):
+                             oversample_prop, pretrained, undersample, validation_frac, worker_timeout_s):
     # TODO: consider passing the entire config to this function instead
     if include_unknowns:
         # Load the training and validation datasets.
@@ -368,10 +374,12 @@ def create_train_val_loaders(balanced_sampler, batch_size, equal_undersampled_va
                                                                        n_train=openset_n_train, n_val=openset_n_val)
         print("[[train]] combining dataloaders and balancing classes")
         train_loader = get_dataloader_combine_and_balance_datasets(closed_dataset_train, open_dataset_train,
-                                                                   batch_size=batch_size, unknowns=True)
+                                                                   batch_size=batch_size, unknowns=True,
+                                                                   timeout=worker_timeout_s)
         print("[[val]] combining dataloaders and balancing classes")
         val_loader = get_dataloader_combine_and_balance_datasets(closed_dataset_val, open_dataset_val,
-                                                                 batch_size=batch_size, unknowns=True)
+                                                                 batch_size=batch_size, unknowns=True,
+                                                                 timeout=worker_timeout_s)
 
         print(f"[INFO]: Number of closed set training images: {len(closed_dataset_train)}")
         print(f"[INFO]: Number of closed set validation images: {len(closed_dataset_val)}")
@@ -385,7 +393,7 @@ def create_train_val_loaders(balanced_sampler, batch_size, equal_undersampled_va
                                                                      equal_undersampled_val=equal_undersampled_val)
         # Load the training and validation data loaders.
         train_loader, val_loader = get_data_loaders(dataset_train, dataset_valid, batch_size, num_dataloader_workers,
-                                                    balanced_sampler=balanced_sampler)
+                                                    balanced_sampler=balanced_sampler, timeout=worker_timeout_s)
         print(f"[INFO]: Number of training images: {len(dataset_train)}")
         print(f"[INFO]: Number of validation images: {len(dataset_valid)}")
     return train_loader, val_loader

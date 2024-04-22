@@ -3,6 +3,7 @@
 *.jpg
 *.png
 data/
+data_by_folder/
 metadata/
 .idea/
 *.bak
