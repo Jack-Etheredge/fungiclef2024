@@ -44,9 +44,9 @@ def build_model(model_id='tf_efficientnetv2_s.in21k', pretrained=True, fine_tune
     Unfortunately some early experiments were run without timm and the state dict keys don't match.
     """
     if pretrained:
-        print('[INFO]: Loading pre-trained weights')
+        print('Loading pre-trained weights')
     else:
-        print('[INFO]: Not loading pre-trained weights')
+        print('Not loading pre-trained weights')
     if use_timm:
         model = timm.create_model(model_id, pretrained=pretrained)
     else:
@@ -55,21 +55,51 @@ def build_model(model_id='tf_efficientnetv2_s.in21k', pretrained=True, fine_tune
         model = models.efficientnet_b0(weights='DEFAULT' if pretrained else None)
         # model = models.efficientnet_v2_s(weights='DEFAULT' if pretrained else None)
     if fine_tune:
-        print('[INFO]: Fine-tuning all layers...')
+        print('Fine-tuning all layers...')
         for params in model.parameters():
             params.requires_grad = True
     elif not fine_tune:
-        print('[INFO]: Freezing hidden layers...')
+        print('Freezing hidden layers...')
         for params in model.parameters():
             params.requires_grad = False
     # Change the final classification head.
     if use_timm:
-        model.classifier = nn.Sequential(nn.Dropout(p=dropout_rate, inplace=True),
-                                         nn.Linear(in_features=model.classifier.in_features, out_features=num_classes))
+        try:
+            model.classifier = nn.Sequential(nn.Dropout(p=dropout_rate, inplace=True),
+                                             nn.Linear(in_features=model.classifier.in_features,
+                                                       out_features=num_classes))
+        except:
+            model.head = nn.Sequential(nn.Dropout(p=dropout_rate, inplace=True),
+                                       nn.Linear(in_features=model.head.in_features, out_features=num_classes))
     else:
         model.classifier[0] = nn.Dropout(p=dropout_rate, inplace=True)
         model.classifier[1] = nn.Linear(in_features=model.classifier.in_features, out_features=num_classes)
     return model
+
+
+def update_dropout_rate(model, dropout_rate):
+    try:
+        model.classifier[0] = nn.Dropout(p=dropout_rate, inplace=True)
+    except:
+        model.head[0] = nn.Dropout(p=dropout_rate, inplace=True)
+    return model
+
+
+def get_embedding_size(model_id='tf_efficientnetv2_s.in21k', use_timm=True):
+    """
+    Unfortunately some early experiments were run without timm and the state dict keys don't match.
+    """
+    if use_timm:
+        model = timm.create_model(model_id, pretrained=False)
+    else:
+        print(("WARNING: this is a legacy option for evaluation of some of the earliest trained models in this repo."
+               "Make sure this is what you wanted to do."))
+        model = models.efficientnet_b0(weights=None)
+    try:
+        embedding_size = model.classifier.in_features
+    except:
+        embedding_size = model.head.in_features
+    return embedding_size
 
 
 def unfreeze_model(model):

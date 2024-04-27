@@ -20,7 +20,7 @@ import hydra
 from omegaconf import DictConfig, OmegaConf
 
 from paths import CHECKPOINT_DIR
-from closedset_model import build_model, unfreeze_model
+from closedset_model import build_model, unfreeze_model, update_dropout_rate
 from datasets import get_datasets, get_data_loaders, get_dataloader_combine_and_balance_datasets, get_openset_datasets
 from evaluate import evaluate_experiment
 from utils import save_plots, checkpoint_model
@@ -137,19 +137,35 @@ def create_scheduler_and_optimizer(model, lr, weight_decay, lr_scheduler, lr_sch
     return optimizer, scheduler
 
 
+def get_progression_params(cfg, epoch):
+    # progressive learning params
+    start_image_size = cfg["progressive-learning"]["start_image_size"]
+    end_image_size = cfg["progressive-learning"]["end_image_size"]
+    start_dropout = cfg["progressive-learning"]["start_dropout"]
+    end_dropout = cfg["progressive-learning"]["end_dropout"]
+    start_batch_size = cfg["progressive-learning"]["start_batch_size"]
+    end_batch_size = cfg["progressive-learning"]["end_batch_size"]
+    progression_epochs = cfg["progressive-learning"]["progression_epochs"]
+
+    epoch_percent = epoch / (progression_epochs - 1)
+    image_size = start_image_size + epoch_percent * (end_image_size - start_image_size)
+    dropout_rate = start_dropout + epoch_percent * (end_dropout - start_dropout)
+    batch_size = start_batch_size + epoch_percent * (end_batch_size - start_batch_size)
+
+    return int(image_size), dropout_rate, int(batch_size)
+
+
 @hydra.main(version_base=None, config_path="conf", config_name="config")
 def train_model(cfg: DictConfig) -> None:
     print(OmegaConf.to_yaml(cfg))
     model_id = cfg["train"]["model_id"]
     use_timm = cfg["train"]["use_timm"]
-    image_size = cfg["train"]["image_size"]
     epochs = cfg["train"]["epochs"]
     lr = cfg["train"]["lr"]
     pretrained = cfg["train"]["pretrained"]
     early_stop_thresh = cfg["train"]["early_stop_thresh"]
     multiclass_loss_function = cfg["train"]["loss_function"]
     use_poison_loss = cfg["train"]["use_poison_loss"]
-    batch_size = cfg["train"]["batch_size"]
     num_dataloader_workers = cfg["train"]["num_dataloader_workers"]
     validation_frac = cfg["train"]["validation_frac"]
     max_norm = cfg["train"]["max_norm"]
@@ -157,7 +173,6 @@ def train_model(cfg: DictConfig) -> None:
     oversample = cfg["train"]["oversample"]
     equal_undersampled_val = cfg["train"]["equal_undersampled_val"]
     oversample_prop = cfg["train"]["oversample_prop"]
-    dropout_rate = cfg["train"]["dropout_rate"]
     weight_decay = cfg["train"]["weight_decay"]
     balanced_sampler = cfg["train"]["balanced_sampler"]
     use_lr_finder = cfg["train"]["use_lr_finder"]
@@ -195,16 +210,9 @@ def train_model(cfg: DictConfig) -> None:
     with open(str(experiment_dir / "experiment_config.json"), "w") as f:
         json.dump(config_dict, f)
 
-    # torch.autograd.set_detect_anomaly(True)
+    image_size, dropout_rate, batch_size = get_progression_params(cfg, epoch=0)
 
-    train_loader, val_loader = create_train_val_loaders(balanced_sampler, batch_size,
-                                                        equal_undersampled_val, image_size,
-                                                        include_unknowns,
-                                                        num_dataloader_workers,
-                                                        openset_n_train, openset_n_val,
-                                                        oversample, oversample_prop,
-                                                        pretrained, undersample,
-                                                        validation_frac, worker_timeout_s)
+    # torch.autograd.set_detect_anomaly(True)
 
     device = ('cuda:0' if torch.cuda.is_available() else 'cpu')
     print(f"Computation device: {device}")
@@ -236,6 +244,8 @@ def train_model(cfg: DictConfig) -> None:
         best_validation_loss = checkpoint['validation_loss']
         best_epoch = checkpoint['epoch']
         start_epoch = best_epoch + 1
+        # update settings based on epoch from checkpoint
+        image_size, dropout_rate, batch_size = get_progression_params(cfg, epoch=start_epoch)
         try:
             optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
             optimizer.param_groups[0]["lr"] = lr
@@ -249,6 +259,15 @@ def train_model(cfg: DictConfig) -> None:
         optimizer, scheduler = create_scheduler_and_optimizer(model, lr, weight_decay, lr_scheduler,
                                                               lr_scheduler_patience)
         print(f"training new model: {experiment_id}")
+
+    train_loader, val_loader = create_train_val_loaders(balanced_sampler, batch_size,
+                                                        equal_undersampled_val, image_size,
+                                                        include_unknowns,
+                                                        num_dataloader_workers,
+                                                        openset_n_train, openset_n_val,
+                                                        oversample, oversample_prop,
+                                                        pretrained, undersample,
+                                                        validation_frac, worker_timeout_s)
 
     # Total parameters and trainable parameters.
     total_params = sum(p.numel() for p in model.parameters())
@@ -284,6 +303,9 @@ def train_model(cfg: DictConfig) -> None:
     unfrozen = fine_tune_after_n_epochs == 0
     for epoch in range(start_epoch, epochs):
 
+        image_size, dropout_rate, batch_size = get_progression_params(cfg, epoch)
+        model = update_dropout_rate(model, dropout_rate)
+
         if (not unfrozen and (skip_frozen_epochs_load_failed_model or
                               epoch + 1 > fine_tune_after_n_epochs)):
             model = unfreeze_model(model)
@@ -292,12 +314,19 @@ def train_model(cfg: DictConfig) -> None:
                                                                   lr_scheduler_patience)
             unfrozen = True
 
-        print(f"Epoch {epoch + 1} of {epochs}")
+        print(
+            f"Epoch {epoch + 1} of {epochs}, image_size: {image_size}, dropout: {dropout_rate}, batch size: {batch_size}")
         curr_lr = optimizer.param_groups[0]["lr"]
         print(f"current learning rate: {curr_lr:.0e}")
         recreate_loader = True
         while recreate_loader:
             try:
+                train_loader, val_loader = create_train_val_loaders(balanced_sampler, batch_size,
+                                                                    equal_undersampled_val, image_size,
+                                                                    include_unknowns, num_dataloader_workers,
+                                                                    openset_n_train, openset_n_val, oversample,
+                                                                    oversample_prop, pretrained, undersample,
+                                                                    validation_frac, worker_timeout_s)
                 train_epoch_loss, train_epoch_acc = train(model, train_loader,
                                                           optimizer, criterion, multiclass_loss_function, max_norm,
                                                           device)
@@ -306,16 +335,16 @@ def train_model(cfg: DictConfig) -> None:
                 print("issue with training")
                 print(e)
                 print("recreating data loaders and trying again")
+
+        recreate_loader = True
+        while recreate_loader:
+            try:
                 train_loader, val_loader = create_train_val_loaders(balanced_sampler, batch_size,
                                                                     equal_undersampled_val, image_size,
                                                                     include_unknowns, num_dataloader_workers,
                                                                     openset_n_train, openset_n_val, oversample,
                                                                     oversample_prop, pretrained, undersample,
                                                                     validation_frac, worker_timeout_s)
-
-        recreate_loader = True
-        while recreate_loader:
-            try:
                 valid_epoch_loss, valid_epoch_acc = validate(model, val_loader,
                                                              criterion, multiclass_loss_function, device)
                 if scheduler:
@@ -325,12 +354,6 @@ def train_model(cfg: DictConfig) -> None:
                 print("issue with validation")
                 print(e)
                 print("recreating data loaders and trying again")
-                train_loader, val_loader = create_train_val_loaders(balanced_sampler, batch_size,
-                                                                    equal_undersampled_val, image_size,
-                                                                    include_unknowns, num_dataloader_workers,
-                                                                    openset_n_train, openset_n_val, oversample,
-                                                                    oversample_prop, pretrained, undersample,
-                                                                    validation_frac, worker_timeout_s)
 
         train_loss.append(train_epoch_loss)
         valid_loss.append(valid_epoch_loss)
@@ -363,19 +386,19 @@ def train_model(cfg: DictConfig) -> None:
     print('EVALUATION COMPLETE')
 
 
-def create_train_val_loaders(balanced_sampler, batch_size, equal_undersampled_val, image_size,
+def create_train_val_loaders(balanced_sampler, batch_size, equal_undersampled_val, image_resize,
                              include_unknowns, num_dataloader_workers, openset_n_train, openset_n_val, oversample,
                              oversample_prop, pretrained, undersample, validation_frac, worker_timeout_s):
     # TODO: consider passing the entire config to this function instead
     if include_unknowns:
         # Load the training and validation datasets.
-        closed_dataset_train, closed_dataset_val, _ = get_datasets(pretrained, image_size,
+        closed_dataset_train, closed_dataset_val, _ = get_datasets(pretrained, image_resize,
                                                                    validation_frac,
                                                                    oversample=oversample,
                                                                    undersample=undersample,
                                                                    oversample_prop=oversample_prop,
                                                                    equal_undersampled_val=equal_undersampled_val)
-        open_dataset_train, open_dataset_val, _ = get_openset_datasets(pretrained=pretrained, image_size=image_size,
+        open_dataset_train, open_dataset_val, _ = get_openset_datasets(pretrained=pretrained, image_size=image_resize,
                                                                        n_train=openset_n_train, n_val=openset_n_val,
                                                                        training_augs=True)
         print("[[train]] combining dataloaders and balancing classes")
@@ -393,7 +416,7 @@ def create_train_val_loaders(balanced_sampler, batch_size, equal_undersampled_va
         print(f"Number of open set validation images: {len(open_dataset_val)}")
     else:
         # Load the training and validation datasets.
-        dataset_train, dataset_valid, dataset_classes = get_datasets(pretrained, image_size, validation_frac,
+        dataset_train, dataset_valid, dataset_classes = get_datasets(pretrained, image_resize, validation_frac,
                                                                      oversample=oversample, undersample=undersample,
                                                                      oversample_prop=oversample_prop,
                                                                      equal_undersampled_val=equal_undersampled_val)

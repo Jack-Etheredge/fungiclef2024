@@ -19,19 +19,13 @@ from scipy.stats import entropy
 from closedset_model import build_model
 from competition_metrics import evaluate
 from create_opengan_discriminator import train_and_select_discriminator, create_composite_model
+from datasets import get_valid_transform
+from paths import METADATA_DIR, VAL_DATA_DIR
 from temperature_scaling import ModelWithTemperature
 from temp_scale_model import create_temperature_scaled_model
 
 np.set_printoptions(precision=5)
 ImageFile.LOAD_TRUNCATED_IMAGES = True
-
-# TODO: pull this transformation from the datasets module
-TRANSFORMS = v2.Compose([
-    v2.Resize(256, interpolation=v2.InterpolationMode.BICUBIC, antialias=True),
-    v2.CenterCrop(224),
-    v2.Compose([v2.ToImage(), v2.ToDtype(torch.float32, scale=True)]),
-    v2.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-])
 
 
 def get_threshold(max_prob_list, k):
@@ -50,7 +44,7 @@ def get_threshold(max_prob_list, k):
 
 def get_penultimate_layer_output(model, image):
     penultimate_layer_output = None
-    
+
     def get_input():
         def hook(model, input, output):
             penultimate_layer_output = input[0].detach()
@@ -68,13 +62,19 @@ class PytorchWorker:
 
     def __init__(self, model_path: str, number_of_categories: int = 1604, temp_scaling=False,
                  model_id="efficientnet_b0", use_timm=True, device="cpu"):
-        self.number_of_categories = number_of_categories  # must be set before calling _load_model
-        self.temp_scaling = temp_scaling  # must be set before calling _load_model
-        self.model_id = model_id  # must be set before calling _load_model
-        self.use_timm = use_timm  # must be set before calling _load_model
-        self.model = self._load_model(model_path)
-        self.transforms = TRANSFORMS
+
+        ########################################
+        # must be set before calling _load_model
+        self.number_of_categories = number_of_categories
+        self.temp_scaling = temp_scaling
+        self.model_id = model_id
+        self.use_timm = use_timm
         self.device = device
+        ########################################
+
+        self.transforms = TRANSFORMS
+        # most other attributes must be set before calling _load_model, so call last
+        self.model = self._load_model(model_path)
 
     def _load_model(self, model_path):
         print("Setting up Pytorch Model")
@@ -111,13 +111,16 @@ class PytorchWorker:
 
 
 def make_submission(test_metadata, model_path, output_csv_path, images_root_path, temp_scaling,
-                    opengan, model_id, use_timm, cfg):
+                    opengan, cfg):
     """Make submission file"""
     # TODO: use the dataloader with a larger batch size to speed up inference
     # TODO: pull this transformation from the datasets module
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     print(f"Using devide: {device}")
+
+    model_id = cfg["evaluate"]["model_id"]
+    use_timm = cfg["evaluate"]["use_timm"]
 
     # Consolidate the model building logic
     if opengan:
@@ -179,8 +182,7 @@ def evaluate_experiment(cfg, experiment_id, temperature_scaling=False, opengan=F
     predictions_with_unknown_output_csv_path = str(
         experiment_dir / f"submission_with_unknowns_fine_tuned_thresholding{ext}.csv")
 
-    data_dir = Path('__file__').parent.absolute().parent / "data" / "DF21"
-    metadata_file_path = "../metadata/FungiCLEF2023_val_metadata_PRODUCTION.csv"
+    metadata_file_path = METADATA_DIR / "FungiCLEF2023_val_metadata_PRODUCTION.csv"
     test_metadata = pd.read_csv(metadata_file_path)
 
     # TODO: set thresholds on val
@@ -196,12 +198,10 @@ def evaluate_experiment(cfg, experiment_id, temperature_scaling=False, opengan=F
         make_submission(
             test_metadata=test_metadata,
             model_path=model_path,
-            images_root_path=data_dir,
+            images_root_path=VAL_DATA_DIR,
             output_csv_path=predictions_output_csv_path,
             temp_scaling=temperature_scaling,
             opengan=opengan,
-            model_id=model_id,
-            use_timm=use_timm,
             cfg=cfg,
         )
 
@@ -216,7 +216,7 @@ def evaluate_experiment(cfg, experiment_id, temperature_scaling=False, opengan=F
         y_true = test_metadata["class_id"].values
         submission_df = pd.read_csv(predictions_output_csv_path)
         submission_df.drop_duplicates("observation_id", keep="first", inplace=True)
-        y_proba = submission_df["max_proba"].values if openset_label == 0 else -submission_df["max_proba"].values
+        y_proba = submission_df["max_proba"].values if openset_label == 1 else -submission_df["max_proba"].values
         threshold_range = np.arange(y_proba.min(), y_proba.max(), 0.01)
         best_threshold = get_best_threshold(metrics_output_csv_path, submission_df, threshold_range, y_proba,
                                             y_true)
@@ -269,7 +269,8 @@ def create_homebrwed_scores_and_save_predictions_csv(best_threshold, predictions
     # reset y_pred and create y_pred_w_unknown using the best threshold before calculating homebrewed_scores
     y_pred = np.copy(submission_df["class_id"].values)
     y_pred_w_unknown = y_pred.copy()
-    y_pred_w_unknown[y_proba < best_threshold] = -1
+    if not best_threshold is None:
+        y_pred_w_unknown[y_proba < best_threshold] = -1
     homebrewed_scores = calc_homebrewed_scores(y_true, y_pred, y_pred_w_unknown)
     # make and save the unknown output csv
     submission_df.loc[:, "class_id"] = y_pred_w_unknown
@@ -368,7 +369,6 @@ if __name__ == "__main__":
     # TODO: address issue of evaluating on all the unknowns despite some being used for train and val in fine-tuning
     # TODO: set threshold on val, evaluate on test (this should also solve the above given a val loader for unknowns)
     # TODO: use dataloader with a larger batch size to speed up inference
-    # TODO: pull test transformations from the datasets module
 
     with initialize(version_base=None, config_path="conf", job_name="evaluate"):
         cfg = compose(config_name="config")
@@ -377,8 +377,11 @@ if __name__ == "__main__":
     experiment_id = cfg["evaluate"]["experiment_id"]
     use_timm = cfg["evaluate"]["use_timm"]
     model_id = cfg["evaluate"]["model_id"]
+    image_size = cfg["evaluate"]["image_size"]
 
-    outputs_precomputed = True
+    TRANSFORMS = get_valid_transform(image_size=image_size, pretrained=True)
+
+    outputs_precomputed = False
     print(f"evaluating experiment {experiment_id}")
     evaluate_experiment(cfg=cfg, experiment_id=experiment_id, from_outputs=outputs_precomputed)
     print("creating temperature scaled model")
@@ -386,8 +389,8 @@ if __name__ == "__main__":
     print(f"evaluating experiment {experiment_id} with temperature scaling")
     evaluate_experiment(cfg=cfg, experiment_id=experiment_id, temperature_scaling=True,
                         from_outputs=outputs_precomputed)
-    outputs_precomputed = False
     print("training openGAN model")
     train_and_select_discriminator(cfg)
     print(f"evaluating experiment {experiment_id} with openGAN")
     evaluate_experiment(cfg=cfg, experiment_id=experiment_id, opengan=True, from_outputs=outputs_precomputed)
+    # evaluate_experiment(cfg=cfg, experiment_id=experiment_id, opengan=True, from_outputs=True)

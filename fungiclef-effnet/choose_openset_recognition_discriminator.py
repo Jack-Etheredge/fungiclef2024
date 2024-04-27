@@ -16,7 +16,7 @@ from omegaconf import DictConfig, OmegaConf
 from paths import CHECKPOINT_DIR
 from tqdm import tqdm
 
-from closedset_model import build_model
+from closedset_model import build_model, get_embedding_size
 from datasets import get_openset_datasets, get_datasets, get_closedset_test_dataset, collate_fn
 from openset_recognition_models import Discriminator
 
@@ -25,7 +25,6 @@ from openset_recognition_models import Discriminator
 
 
 def choose_best_discriminator(cfg: DictConfig, project_name=None) -> Path:
-    nc = cfg["open-set-recognition"]["embedding_size"]
     hidden_dim = cfg["open-set-recognition"]["hidden_dim_d"]
     eval_fraction = 0.1
     max_total_examples = 10_000  # TODO: reincorporate this
@@ -34,6 +33,10 @@ def choose_best_discriminator(cfg: DictConfig, project_name=None) -> Path:
     embedder_experiment_id = cfg["evaluate"]["experiment_id"]
     model_id = cfg["evaluate"]["model_id"]
     use_timm = cfg["evaluate"]["use_timm"]
+    image_size = cfg["evaluate"]["image_size"]
+
+    # get embedding size from the trained evaluation (embedder) model
+    nc = get_embedding_size(model_id=model_id, use_timm=use_timm)
 
     openset_label = float(cfg["open-set-recognition"]["openset_label"])
     closedset_label = float(cfg["open-set-recognition"]["closedset_label"])
@@ -51,7 +54,6 @@ def choose_best_discriminator(cfg: DictConfig, project_name=None) -> Path:
     n_workers = cfg["open-set-recognition"]["n_workers"]
     openset_embeddings_name = cfg["open-set-recognition"]["openset_embeddings_name"]
     closedset_embeddings_name = cfg["open-set-recognition"]["closedset_embeddings_name"]
-    image_size = cfg["open-set-recognition"]["image_size"]
     openset_n_train = cfg["open-set-recognition"]["openset_n_train"]
     openset_n_val = cfg["open-set-recognition"]["openset_n_val"]
     pretrained = cfg["open-set-recognition"]["pretrained"]

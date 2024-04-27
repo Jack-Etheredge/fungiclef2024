@@ -8,6 +8,7 @@ from torch import nn
 
 from choose_openset_recognition_discriminator import choose_best_discriminator, create_feature_extractor_from_model, \
     load_model_for_inference
+from closedset_model import get_embedding_size
 from create_embeddings_openset_recognition import create_embeddings
 from openset_recognition_models import Discriminator
 from paths import CHECKPOINT_DIR
@@ -46,13 +47,15 @@ class CompositeOpenGANInferenceModel(nn.Module):
 def create_composite_model(cfg: DictConfig) -> nn.Module:
     experiment_id = cfg["evaluate"]["experiment_id"]
     experiment_dir = CHECKPOINT_DIR / experiment_id
-    nc = cfg["open-set-recognition"]["embedding_size"]
     hidden_dim = cfg["open-set-recognition"]["hidden_dim_d"]
     model_id = cfg["evaluate"]["model_id"]
     use_timm = cfg["evaluate"]["use_timm"]
     n_classes = cfg["train"]["n_classes"]
     openset_label = cfg["open-set-recognition"]["openset_label"]
     embedder_layer_offset = cfg["open-set-recognition"]["embedder_layer_offset"]
+
+    # get embedding size from the trained evaluation (embedder) model
+    nc = get_embedding_size(model_id=model_id, use_timm=use_timm)
 
     # set device, which gpu to use.
     device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
