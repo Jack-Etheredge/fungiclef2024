@@ -19,6 +19,7 @@ def create_embeddings(cfg: DictConfig) -> None:
     embedder_experiment_id = cfg["evaluate"]["experiment_id"]
     model_id = cfg["evaluate"]["model_id"]
     use_timm = cfg["evaluate"]["use_timm"]
+    image_size = cfg["evaluate"]["image_size"]
 
     # embedder setup
     embedder_layer_offset = cfg["open-set-recognition"]["embedder_layer_offset"]
@@ -26,7 +27,6 @@ def create_embeddings(cfg: DictConfig) -> None:
     n_workers = cfg["open-set-recognition"]["n_workers"]
     openset_embeddings_name = cfg["open-set-recognition"]["openset_embeddings_name"]
     closedset_embeddings_name = cfg["open-set-recognition"]["closedset_embeddings_name"]
-    image_size = cfg["open-set-recognition"]["image_size"]
     openset_n_train = cfg["open-set-recognition"]["openset_n_train"]
     openset_n_val = cfg["open-set-recognition"]["openset_n_val"]
     closedset_n_train = cfg["open-set-recognition"]["closedset_n_train"]

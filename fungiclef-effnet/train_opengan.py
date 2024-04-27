@@ -214,10 +214,11 @@ def train_openganfea(cfg: DictConfig) -> str:
     weight_per_sample = torch.from_numpy(weight_per_sample)
     weight_per_sample = weight_per_sample.double()
     sampler = torch.utils.data.sampler.WeightedRandomSampler(weight_per_sample, len(weight_per_sample))
+    # TODO: this should be configured from hydra
     dataloader = DataLoader(dataset, batch_size=batch_size, sampler=sampler,
                             num_workers=16,
                             timeout=120,
-                            persistent_workers=True,
+                            # persistent_workers=True,
                             )
 
     # Initialize BCELoss function

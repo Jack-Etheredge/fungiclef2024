@@ -1,48 +1,53 @@
 # reference: https://hydra.cc/docs/tutorials/basic/your_first_app/using_config/
 train:
-  experiment_id: null
+  experiment_id: "2024-04-26 13:31:54.470604"
   model_id: "tf_efficientnetv2_s.in21k"
-  # eva02_large_patch14_clip_336.merged2b_ft_inat21
-  # tf_efficientnetv2_s.in21k
   use_timm: True
   epochs: 200
-  lr: 1.12e-3  # found with lr finder
-  use_lr_finder: False
+  lr: 1e-3  # found with lr finder, stepping down by 1/10 after loader failure
+  use_lr_finder: True
   pretrained: True
   early_stop_thresh: 10
   loss_function: "seesaw"
   use_poison_loss: True  # check me
   include_unknowns: False  # check me
-  batch_size: 128
-  num_dataloader_workers: 16
-  worker_timeout_s: 180
-  image_resize: 224
+  batch_size: 32  # 128 works for up to tf_efficientnetv2_s.in21k
+  num_dataloader_workers: 12
+  worker_timeout_s: 240
+  image_resize: 380  # 224 for efficientnet_b0, 128-300+ efficientnet_v2s; 336 for eva-02
   validation_frac: 0.1
   max_norm: 1.0
   undersample: False
   oversample: False
   equal_undersampled_val: True
   oversample_prop: 0.1
-  dropout_rate: 0.0
-  weight_decay: 1e-5
+  dropout_rate: 0.3
+  weight_decay: 1e-2  # originally 1e-2 for eva-02
   balanced_sampler: False
-  fine_tune_after_n_epochs: 4
-  skip_frozen_epochs_load_failed_model: False  # check me
-  notes: trivialaug  # check me
+  fine_tune_after_n_epochs: 5
+  skip_frozen_epochs_load_failed_model: True  # check me
+  notes: trivial aug, double resize before randomcrop # check me
   n_classes: 1604
   lr_scheduler: "reducelronplateau"
   lr_scheduler_patience: 4
+progressive-learning:
+  start_image_size: 128
+  end_image_size: 380
+  start_dropout: 0.1
+  end_dropout: 0.3
+  start_batch_size: 128
+  end_batch_size: 32
+  progression_epochs: 100
 open-set-recognition:
   embedder_layer_offset: -1
   dlr: 1e-6
-  glr: 1e-6
+  glr: 1.5e-6
   seed: 999
   batch_size: 128
   n_workers: 16
   epochs: 100
   openset_embeddings_name: "openset_embeddings_${evaluate.experiment_id}.h5"
   closedset_embeddings_name: "closedset_embeddings_${evaluate.experiment_id}.h5"
-  image_size: 224
   pretrained: True
   openset_n_train: 2000
   openset_n_val: 200
@@ -53,6 +58,7 @@ open-set-recognition:
   openset_label: 0
   closedset_label: 1
 evaluate:
-  experiment_id: "2024-04-16 unknown fine tune"
-  model_id: "efficientnet_b0"
-  use_timm: False
+  experiment_id: "2024-04-23 16:03:16.909449"
+  model_id: "tf_efficientnetv2_s.in21k"
+  use_timm: True
+  image_size: 380

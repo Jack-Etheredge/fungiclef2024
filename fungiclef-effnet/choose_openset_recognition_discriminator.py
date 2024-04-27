@@ -33,6 +33,8 @@ def choose_best_discriminator(cfg: DictConfig, project_name=None) -> Path:
     embedder_experiment_id = cfg["evaluate"]["experiment_id"]
     model_id = cfg["evaluate"]["model_id"]
     use_timm = cfg["evaluate"]["use_timm"]
+    image_size = cfg["evaluate"]["image_size"]
+
     # get embedding size from the trained evaluation (embedder) model
     nc = get_embedding_size(model_id=model_id, use_timm=use_timm)
 
@@ -52,7 +54,6 @@ def choose_best_discriminator(cfg: DictConfig, project_name=None) -> Path:
     n_workers = cfg["open-set-recognition"]["n_workers"]
     openset_embeddings_name = cfg["open-set-recognition"]["openset_embeddings_name"]
     closedset_embeddings_name = cfg["open-set-recognition"]["closedset_embeddings_name"]
-    image_size = cfg["open-set-recognition"]["image_size"]
     openset_n_train = cfg["open-set-recognition"]["openset_n_train"]
     openset_n_val = cfg["open-set-recognition"]["openset_n_val"]
     pretrained = cfg["open-set-recognition"]["pretrained"]

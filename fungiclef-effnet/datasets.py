@@ -7,24 +7,19 @@ https://pytorch.org/vision/stable/transforms.html#v1-or-v2-which-one-should-i-us
 
 import os
 from collections import Counter
-from pathlib import Path
 
-import cv2
 import numpy as np
 import pandas as pd
 import torch
-# from torchvision import datasets
 from PIL import Image, ImageFile
 from imblearn.over_sampling import RandomOverSampler
 from imblearn.under_sampling import RandomUnderSampler
 from sklearn.model_selection import train_test_split
-from torchvision import transforms
-from torchvision.datasets import ImageFolder
 from torchvision.transforms import v2
 from torch.utils.data import DataLoader, Dataset, Subset, ConcatDataset
 from torchvision.transforms.v2 import InterpolationMode
 
-from paths import DATA_DIR, DATA_FROM_FOLDER_DIR, METADATA_DIR
+from paths import DATA_DIR, METADATA_DIR
 
 # dataset loading issue
 # https://github.com/eriklindernoren/PyTorch-YOLOv3/issues/162
@@ -34,17 +29,19 @@ WORKER_TIMEOUT_SECS = 120
 
 
 # Training transforms
-def get_train_transform(image_size, pretrained):
+def get_train_transform(image_size, pretrained, max_image_size=300):
     """
     training transformations
     : param image_size: Image size of resize when applying transforms.
     """
+    # resize = max(image_size + 8, max_image_size)
+    resize = image_size * 2
     train_transform = v2.Compose([
-        v2.Resize(256, interpolation=InterpolationMode.BICUBIC, antialias=True),
+        v2.Resize(resize, interpolation=InterpolationMode.BICUBIC, antialias=True),
         # v2.CenterCrop(224),
-        v2.RandomCrop(224),
-        # v2.TrivialAugmentWide(interpolation=InterpolationMode.BICUBIC),
-        v2.AutoAugment(interpolation=InterpolationMode.BICUBIC),
+        v2.RandomCrop(image_size),
+        v2.TrivialAugmentWide(interpolation=InterpolationMode.BICUBIC),
+        # v2.AutoAugment(interpolation=InterpolationMode.BICUBIC),
         # v2.RandomHorizontalFlip(p=0.5),
         # v2.RandomApply([v2.GaussianBlur(kernel_size=(5, 9), sigma=(0.1, 5))], p=0.5),
         # v2.RandomAdjustSharpness(sharpness_factor=2, p=0.5),
@@ -61,9 +58,10 @@ def get_valid_transform(image_size, pretrained):
     """
     validation transformations
     """
+    resize = image_size
     valid_transform = v2.Compose([
-        v2.Resize(256, interpolation=InterpolationMode.BICUBIC, antialias=True),
-        v2.CenterCrop(224),
+        v2.Resize(resize, interpolation=InterpolationMode.BICUBIC, antialias=True),
+        v2.CenterCrop(image_size),
         # v2.ToTensor(),
         v2.Compose([v2.ToImage(), v2.ToDtype(torch.float32, scale=True)]),
         normalize_transform(pretrained)
@@ -221,7 +219,7 @@ def get_data_loaders(train_dataset, val_dataset, batch_size, num_workers, balanc
                                   # pin_memory=True,
                                   # pin_memory_device=device,
                                   timeout=timeout,
-                                  persistent_workers=True,
+                                  # persistent_workers=True,
                                   collate_fn=collate_fn,
                                   )
 
@@ -232,36 +230,37 @@ def get_data_loaders(train_dataset, val_dataset, batch_size, num_workers, balanc
             # pin_memory=True,
             # pin_memory_device=device,
             timeout=timeout,
-            persistent_workers=True,
+            # persistent_workers=True,
             collate_fn=collate_fn,
         )
     valid_loader = DataLoader(
         val_dataset, batch_size=batch_size,
-        shuffle=False, num_workers=num_workers,
+        shuffle=False, num_workers=max(1, int(num_workers * 0.25)),
         # pin_memory=True,
         # pin_memory_device=device,
         timeout=timeout,
-        persistent_workers=True,
+        # persistent_workers=True,
         collate_fn=collate_fn,
     )
     return train_loader, valid_loader
 
 
-def get_openset_datasets(pretrained, image_size, n_train=2000, n_val=200, seed=42):
+def get_openset_datasets(pretrained, image_size, n_train=2000, n_val=200, seed=42, training_augs=False):
     """
     Function to prepare the Datasets.
     :param pretrained: Boolean, True or False.
+    :param training_augs: Whether to use training augmentations for the training dataset. This is useful if fine-tuning
+        on the unknown/open dataset, but probably not desired if creating embeddings for openGAN.
     Returns the training, validation, and test sets for the openset dataset.
     """
-
-    # TODO: revisit the idea of training transformations for the open set discriminator training
 
     # set up the dataset twice but with different transformations
     train_dataset = CustomImageDataset(
         label_file_path=METADATA_DIR / "FungiCLEF2023_val_metadata_PRODUCTION.csv",
         img_dir=DATA_DIR / "DF21",
         keep_only={-1},
-        transform=(get_train_transform(image_size, pretrained))
+        transform=((get_train_transform(image_size, pretrained)) if training_augs else
+                   (get_valid_transform(image_size, pretrained)))  # this is the difference
     )
     val_test_dataset = CustomImageDataset(
         label_file_path=METADATA_DIR / "FungiCLEF2023_val_metadata_PRODUCTION.csv",
@@ -304,7 +303,7 @@ def get_closedset_test_dataset(pretrained, image_size):
 
 def get_dataloader_combine_and_balance_datasets(dataset_1, dataset_2, batch_size, num_workers=16,
                                                 timeout=WORKER_TIMEOUT_SECS,
-                                                persistent_workers=True, unknowns=False):
+                                                persistent_workers=False, unknowns=False):
     """
     https://pytorch.org/docs/stable/data.html
     https://discuss.pytorch.org/t/how-to-handle-imbalanced-classes/11264
