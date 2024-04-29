@@ -5,8 +5,12 @@ switch to v2 of transforms
 https://pytorch.org/vision/stable/transforms.html#v1-or-v2-which-one-should-i-use
 """
 
+import math
 import os
+import re
+import random
 from collections import Counter
+from math import radians, cos, sin, asin, sqrt, pi
 
 import numpy as np
 import pandas as pd
@@ -20,6 +24,45 @@ from torch.utils.data import DataLoader, Dataset, Subset, ConcatDataset
 from torchvision.transforms.v2 import InterpolationMode
 
 from paths import DATA_DIR, METADATA_DIR
+
+random.seed(2021)
+
+countryCode = [
+    'FO', 'DE', 'GA', 'CR', 'SJ', 'AT', 'IE', 'JP', 'FR', 'AU', 'PL', 'GR', 'US',
+    'RU', 'PT', 'RE', 'AL', 'CA', 'IT', 'NP', 'HR', 'GL', 'GB', 'FI', 'NO', 'CH',
+    'SE', 'HU', 'NL', 'ES', 'IS', 'BE', 'CZ', 'DK',
+    # new ones:
+    # 'LV', 'LI', 'BA', 'RO', 'MT', 'EE', 'ID',
+]
+
+Substrate = [
+    'fruits', 'remains of vertebrates (e.g. feathers and fur)', 'other substrate',
+    'dead wood (including bark)', 'wood', 'stems of herbs, grass etc', 'dead stems of herbs, grass etc',
+    'stone', 'wood and roots of living trees', 'mycetozoans', 'bark', 'calcareous stone',
+    'building stone (e.g. bricks)', 'faeces', 'wood chips or mulch', 'living leaves', 'fungi',
+    'living stems of herbs, grass etc', 'leaf or needle litter',
+    'siliceous stone', 'mosses', 'bark of living trees', 'insects', 'spiders', 'living flowers', 'catkins', 'lichens',
+    'soil', 'liverworts', 'peat mosses', 'cones', 'fire spot',
+    # new ones:
+    # 'šišky', 'mechorosty', 'půda', 'kůra živých stromů', 'houby', 'odumřelé dřevo (včetně kůry)',
+    # 'dřevní štěpka nebo mulč', 'listí nebo jehličí', 'dřevo a kořeny živých stromů',
+]  # contains nan
+
+Habitat = [
+    'bog', 'Unmanaged deciduous woodland', 'Unmanaged coniferous woodland', 'Acidic oak woodland',
+    'ditch', 'wooded meadow, grazing forest', 'natural grassland', 'heath', 'dune', 'park/churchyard',
+    'fertilized field in rotation', 'gravel or clay pit', 'Deciduous woodland', 'Bog woodland',
+    'coniferous woodland/plantation', 'Forest bog', 'Mixed woodland (with coniferous and deciduous trees)',
+    'lawn', 'salt meadow', 'Willow scrubland', 'improved grassland', 'rock', 'garden', 'Thorny scrubland',
+    'other habitat', 'fallow field', 'masonry', 'roadside', 'hedgerow', 'meadow', 'roof',
+    # new ones:
+    # 'zahrada', 'louka/trávník', 'listnatý les', 'park/hřbitov', 'louka', 'jehličnatý les s přirozeným charakterem',
+    # 'lesní rašeliniště', 'krajnice', 'trávník', 'acidofilní / kyselá doubrava', 'listnatý les s přirozeným charakterem',
+    # 'smíšený les', 'pole', 'příkop', 'jehličnatý les / monokultura', 'živý plot',
+
+]  # contains nan
+
+IMG_EXTENSIONS = ['.png', '.jpg', '.jpeg']
 
 # dataset loading issue
 # https://github.com/eriklindernoren/PyTorch-YOLOv3/issues/162
@@ -142,6 +185,7 @@ class CustomImageDataset(Dataset):
     def __init__(self, label_file_path: str, img_dir: str,
                  keep_only: set | None = None,
                  exclude: set | None = None,
+                 include_metadata=False,
                  transform=None,
                  target_transform=None):
         self.img_labels = pd.read_csv(label_file_path, dtype={"class_id": "int64"})
@@ -157,6 +201,7 @@ class CustomImageDataset(Dataset):
         self.target_transform = target_transform
         self.classes = self.img_labels["class_id"].unique()
         self.target = self.img_labels["class_id"].values
+        self.include_metadata = include_metadata
 
     def __len__(self):
         return len(self.img_labels)
@@ -325,6 +370,7 @@ def get_dataloader_combine_and_balance_datasets(dataset_1, dataset_2, batch_size
                             )
     return dataloader
 
+
 # the imagefolder dataset will sort by class then filename, so for data splitting purposes, we can sort the
 # image_path per class and get back the order in the dataset
 # full_dataset = ImageFolder(root=DATA_FROM_FOLDER_DIR)
@@ -363,3 +409,259 @@ def get_dataloader_combine_and_balance_datasets(dataset_1, dataset_2, batch_size
 #     test_dataset.target = np.array([-1] * len(test_dataset))
 #
 #     return train_dataset, val_dataset, test_dataset
+
+
+def get_spatial_info(latitude, longitude):
+    if latitude and longitude:
+        latitude = radians(latitude)
+        longitude = radians(longitude)
+        x = cos(latitude) * cos(longitude)
+        y = cos(latitude) * sin(longitude)
+        z = sin(latitude)
+        return [x, y, z]
+    else:
+        return [0, 0, 0]
+
+
+def get_temporal_info(date, miss_hour=False):
+    try:
+        if date:
+            if miss_hour:
+                pattern = re.compile(r'(\d*)-(\d*)-(\d*)', re.I)
+            else:
+                pattern = re.compile(r'(\d*)-(\d*)-(\d*) (\d*):(\d*):(\d*)', re.I)
+            m = pattern.match(date.strip())
+
+            if m:
+                year = int(m.group(1))
+                month = int(m.group(2))
+                day = int(m.group(3))
+                x_month = sin(2 * pi * month / 12)
+                y_month = cos(2 * pi * month / 12)
+                if miss_hour:
+                    x_hour = 0
+                    y_hour = 0
+                else:
+                    hour = int(m.group(4))
+                    x_hour = sin(2 * pi * hour / 24)
+                    y_hour = cos(2 * pi * hour / 24)
+                return [x_month, y_month, x_hour, y_hour]
+            else:
+                return [0, 0, 0, 0]
+        else:
+            return [0, 0, 0, 0]
+    except:
+        return [0, 0, 0, 0]
+
+
+def encode_temporal_info(month, day):
+    if math.isnan(month):
+        x_month = -2
+        y_month = -2
+    else:
+        month = int(month)
+        x_month = sin(2 * pi * month / 12)
+        y_month = cos(2 * pi * month / 12)
+    if math.isnan(day):
+        x_day = -2
+        y_day = -2
+    else:
+        day = int(day)
+        x_day = sin(2 * pi * day / 31)
+        y_day = cos(2 * pi * day / 31)
+    temporal_info = [x_month, y_month, x_day, y_day]
+    return temporal_info
+
+
+def encode_spatial_info(latitude, longitude):
+    if latitude and longitude:
+        latitude = radians(latitude)
+        longitude = radians(longitude)
+        x = cos(latitude) * cos(longitude)
+        y = cos(latitude) * sin(longitude)
+        z = sin(latitude)
+        return [x, y, z]
+    else:
+        return [0, 0, 0]
+
+
+def encode_onehot(attr, attr_list, additional_unknown_idx=False):
+    if additional_unknown_idx:
+        code = [0] * (len(attr_list) + 1)  # add unknown idx
+        if isinstance(attr, str):
+            try:
+                idx = attr_list.index(attr)
+            except ValueError:
+                idx = len(attr_list)  # add to final position, unknown idx
+            code[idx] = 1
+
+    else:
+        code = [0] * len(attr_list)
+        if isinstance(attr, str):
+            try:
+                idx = attr_list.index(attr)
+                code[idx] = 1
+            except ValueError:
+                pass
+
+    return code
+
+
+def find_images_and_targets_fungi(root, istrain=True, aux_info=True, include_genus=True):
+    if istrain:
+        df = pd.read_csv(os.path.join(root, 'train.csv'))
+        df_val = pd.read_csv(os.path.join(root, 'val.csv'))
+        df = pd.concat([df, df_val])
+    else:
+        df = pd.read_csv(os.path.join(root, 'val.csv'))
+
+    if include_genus:
+        df_train = pd.read_csv(os.path.join(root, 'train.csv'))
+        genus_names = sorted(list(set(df_train["genus"].tolist())))
+
+    images_and_targets = []
+    class_to_idx = {}
+    images_info = []
+    for idx, row in df.iterrows():
+        file_path = row["image_path"]
+        file_path = os.path.join(root, "DF20", file_path)
+        target = int(row["class_id"])
+
+        # if target > 1603 or target < 0:
+        #     continue
+
+        if include_genus:
+            try:
+                genus_target = int(genus_names.index(row["genus"]))
+            except:
+                # continue
+                genus_target = -1
+
+        if aux_info:
+            temporal_info = encode_temporal_info(row["month"], row["day"])
+            # spatial_info = encode_spatial_info(row["Latitude"], row["Longitude"])
+            countryCode_onehot_info = encode_onehot(row["countryCode"], countryCode)
+            Substrate_onehot_info = encode_onehot(row["Substrate"], Substrate)
+            Habitat_onehot_info = encode_onehot(row["Habitat"], Habitat)
+            onehot_info = countryCode_onehot_info + Substrate_onehot_info + Habitat_onehot_info
+
+            # Substrate Habitat countryCode
+            # images_and_targets.append((file_path, target, genus_target, temporal_info + spatial_info + onehot_info))
+            if include_genus:
+                images_and_targets.append((file_path, target, genus_target, temporal_info + onehot_info))
+            else:
+                images_and_targets.append((file_path, target, temporal_info + onehot_info))
+        else:
+            if include_genus:
+                images_and_targets.append((file_path, target, genus_target))
+            else:
+                images_and_targets.append((file_path, target))
+
+    print(f"number of training samples {len(images_and_targets)}")
+    return images_and_targets, class_to_idx, images_info
+
+
+def find_images_and_targets_fungi_test(root, istrain=False, aux_info=False):
+    # df = pd.read_csv(os.path.join(root, 'val.csv'))
+    df = pd.read_csv(os.path.join(root, 'test.csv'))
+    images_and_targets = []
+    class_to_idx = {}
+    images_info = []
+    for idx, row in df.iterrows():
+        file_path = row["image_path"]
+        file_path = os.path.join(root, "DF21", file_path)
+        target = 0  # fake target
+
+        if aux_info:
+            temporal_info = encode_temporal_info(row["month"], row["day"])
+            # spatial_info = encode_spatial_info(row["Latitude"], row["Longitude"])
+            countryCode_onehot_info = encode_onehot(row["countryCode"], countryCode)
+            Substrate_onehot_info = encode_onehot(row["Substrate"], Substrate)
+            Habitat_onehot_info = encode_onehot(row["Habitat"], Habitat)
+
+            onehot_info = countryCode_onehot_info + Substrate_onehot_info + Habitat_onehot_info
+            # onehot_info = Substrate_onehot_info + Habitat_onehot_info
+
+            # Substrate Habitat countryCode
+            images_and_targets.append((file_path, target, target, temporal_info + onehot_info))
+            # images_and_targets.append((file_path, target, target, temporal_info + spatial_info + onehot_info))
+        else:
+            images_and_targets.append((file_path, target))
+
+    return images_and_targets, class_to_idx, images_info
+
+
+def fungi_collate_fn(batch):
+    imgs, targets, genus_targets, auxs, img_names = zip(*batch)
+    imgs = torch.stack(imgs, 0)
+    targets = torch.tensor(targets, dtype=torch.int64)
+    genus_targets = torch.tensor(genus_targets, dtype=torch.int64)
+    auxs = [torch.tensor(aux, dtype=torch.float64) for aux in auxs]
+    auxs = torch.stack(auxs, dim=0)
+    return imgs, targets, genus_targets, auxs, img_names
+
+
+class DatasetMeta(Dataset):
+    def __init__(
+            self,
+            root,
+            load_bytes=False,
+            transform=None,
+            train=False,
+            aux_info=False,
+            dataset='fungi',
+            class_ratio=1.0,
+            per_sample=1.0):
+        self.aux_info = aux_info
+        self.dataset = dataset
+        if dataset == 'fungi':
+            images, class_to_idx, images_info = find_images_and_targets_fungi(root, train, aux_info)
+        elif dataset == 'fungi_test':
+            images, class_to_idx, images_info = find_images_and_targets_fungi_test(root, train, aux_info)
+        if len(images) == 0:
+            raise RuntimeError(f'Found 0 images in subfolders of {root}. '
+                               f'Supported image extensions are {", ".join(IMG_EXTENSIONS)}')
+        self.root = root
+        self.samples = images
+        self.imgs = self.samples  # torchvision ImageFolder compat
+        self.class_to_idx = class_to_idx
+        self.images_info = images_info
+        self.load_bytes = load_bytes
+        self.transform = transform
+        self.dataset = dataset
+
+    def __getitem__(self, index):
+        if self.aux_info:
+            path, target, genus_target, aux_info = self.samples[index]
+        else:
+            path, target = self.samples[index]
+        try:
+            img = open(path, 'rb').read() if self.load_bytes else Image.open(path).convert('RGB')
+        except:
+            try:
+                path = path.replace('DF20', 'DF21')
+                img = open(path, 'rb').read() if self.load_bytes else Image.open(path).convert('RGB')
+            except:
+                path = path.replace('DF21', 'DF20')
+                img = open(path, 'rb').read() if self.load_bytes else Image.open(path).convert('RGB')
+        if self.transform is not None:
+            img = self.transform(img)
+        if self.aux_info:
+            if type(aux_info) is np.ndarray:
+                select_index = np.random.randint(aux_info.shape[0])
+                return img, target, genus_target, aux_info[select_index, :], os.path.basename(path)
+            else:
+                return img, target, genus_target, np.asarray(aux_info).astype(np.float64), os.path.basename(path)
+        else:
+            return img, target
+
+    def __len__(self):
+        return len(self.samples)
+
+
+if __name__ == '__main__':
+    images_and_targets, class_to_idx, images_info = find_images_and_targets_fungi("~/datasets/fungiclef2024/data/",
+                                                                                  istrain=False, aux_info=True)
+    # class_to_idx, images_info both empty
+    for i in range(100):
+        print(images_and_targets[i])

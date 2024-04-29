@@ -58,7 +58,7 @@ open-set-recognition:
   openset_label: 0
   closedset_label: 1
 evaluate:
-  experiment_id: "2024-04-23 16:03:16.909449"
+  experiment_id: "2024-04-26 13:31:54.470604"
   model_id: "tf_efficientnetv2_s.in21k"
   use_timm: True
   image_size: 380

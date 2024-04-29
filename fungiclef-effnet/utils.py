@@ -110,7 +110,7 @@ def weights_init(m):
         nn.init.constant_(m.bias.data, 0)
 
 
-def save_loss_plots(generator_losses, discriminator_losses, model_name):
+def save_loss_plots(generator_losses, discriminator_losses, model_name, save_dir):
     # ## drawing the error curves
     plt.figure(figsize=(10, 5))
     plt.title("Generator and Discriminator Loss During Training")
@@ -119,11 +119,11 @@ def save_loss_plots(generator_losses, discriminator_losses, model_name):
     plt.xlabel("iterations")
     plt.ylabel("Loss")
     plt.legend()
-    plt.savefig(f'learningCurves_{model_name}.png', bbox_inches='tight', transparent=True)
+    plt.savefig(f'{save_dir}/learningCurves_{model_name}.png', bbox_inches='tight', transparent=True)
     # plt.show()
 
 
-def save_discriminator_loss_plot(discriminator_losses, model_name):
+def save_discriminator_loss_plot(discriminator_losses, model_name, save_dir):
     # ## drawing the error curves
     plt.figure(figsize=(10, 5))
     plt.title("Generator and Discriminator Loss During Training")
@@ -131,7 +131,7 @@ def save_discriminator_loss_plot(discriminator_losses, model_name):
     plt.xlabel("iterations")
     plt.ylabel("Loss")
     plt.legend()
-    plt.savefig(f'learningCurves_{model_name}.png', bbox_inches='tight', transparent=True)
+    plt.savefig(f'{save_dir}/learningCurves_{model_name}.png', bbox_inches='tight', transparent=True)
     # plt.show()
 
 

@@ -250,7 +250,7 @@ def train_openganfea(cfg: DictConfig) -> str:
             iters += 1
 
         save_model_state(generator, discriminator, epoch, save_dir)
-        save_loss_plots(gen_losses, dis_losses, project_name)
+        save_loss_plots(gen_losses, dis_losses, project_name, save_dir)
 
     return project_name
 

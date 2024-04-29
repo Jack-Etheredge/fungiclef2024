@@ -119,7 +119,7 @@ def main(cfg: DictConfig) -> None:
     model_id = cfg["evaluate"]["model_id"]
     use_timm = cfg["evaluate"]["use_timm"]
     # get embedding size from the trained evaluation (embedder) model
-    nc = get_embedding_size(model_id=model_id, use_timm=use_timm)
+    embedding_size = get_embedding_size(model_id=model_id, use_timm=use_timm)
 
     # TODO: move these params to hydra
     exp_dir = Path(
@@ -192,7 +192,7 @@ def main(cfg: DictConfig) -> None:
             dis_losses.append(dis_loss.item())
 
         save_model_state(discriminator, epoch, save_dir)
-        save_discriminator_loss_plot(dis_losses, project_name)
+        save_discriminator_loss_plot(dis_losses, project_name, save_dir)
 
 
 if __name__ == "__main__":
