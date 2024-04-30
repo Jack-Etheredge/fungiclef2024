@@ -197,11 +197,6 @@ class MetaFG_Meta(nn.Module):
             self.norm_1 = attn_norm_layer(attn_embed_dims[0])
         # Classifier head
         self.head = nn.Linear(attn_embed_dims[-1], num_classes) if num_classes > 0 else nn.Identity()
-        self.genus_head = nn.Linear(attn_embed_dims[-1], 566)
-        #         if use_arcface:
-        #             self.features = nn.BatchNorm1d(attn_embed_dims[-1], eps=1e-05)
-        #             nn.init.constant_(self.features.weight, 1.0)
-        #             self.features.weight.requires_grad = False
 
         trunc_normal_(self.cls_token_1, std=.02)
         trunc_normal_(self.cls_token_2, std=.02)
@@ -292,7 +287,7 @@ class MetaFG_Meta(nn.Module):
             cls = self.norm(cls)
         else:
             cls = cls_2.squeeze(dim=1)
-        return cls, cls_1
+        return cls
 
     def forward(self, x, meta=None):
         if meta is not None:
@@ -306,18 +301,23 @@ class MetaFG_Meta(nn.Module):
                 mask_index = torch.randperm(meta.size(0))[:int(meta.size(0) * cur_mask_prob)]
                 mask[mask_index] = 0
                 meta = mask * meta
-        x, x2 = self.forward_features(x, meta)
-        x2 = x2.reshape(x.shape[0], -1)
+        x = self.forward_features(x, meta)
         if self.use_arcface:
             x = F.linear(F.normalize(x), F.normalize(self.head.weight))
         else:
             logits = self.head(x)
-            genus_logits = self.genus_head(x2)
-        return logits, genus_logits
+        return logits
+
+
+def filter_kwargs(kwargs):
+    del kwargs["pretrained_cfg"]
+    del kwargs["pretrained_cfg_overlay"]
+    return kwargs
 
 
 @register_model
 def MetaFG_meta_0(pretrained=False, **kwargs):
+    kwargs = filter_kwargs(kwargs)
     model = MetaFG_Meta(conv_embed_dims=[64, 96, 192], attn_embed_dims=[384, 768],
                         conv_depths=[2, 2, 3], attn_depths=[5, 2], num_heads=8, mlp_ratio=4., **kwargs)
     model.default_cfg = default_cfgs['MetaFG_0']
@@ -329,6 +329,7 @@ def MetaFG_meta_0(pretrained=False, **kwargs):
 
 @register_model
 def MetaFG_meta_1(pretrained=False, **kwargs):
+    kwargs = filter_kwargs(kwargs)
     model = MetaFG_Meta(conv_embed_dims=[64, 96, 192], attn_embed_dims=[384, 768],
                         conv_depths=[2, 2, 6], attn_depths=[14, 2], num_heads=8, mlp_ratio=4., **kwargs)
     model.default_cfg = default_cfgs['MetaFG_1']
@@ -340,6 +341,7 @@ def MetaFG_meta_1(pretrained=False, **kwargs):
 
 @register_model
 def MetaFG_meta_2(pretrained=False, **kwargs):
+    kwargs = filter_kwargs(kwargs)
     model = MetaFG_Meta(conv_embed_dims=[128, 128, 256], attn_embed_dims=[512, 1024],
                         conv_depths=[2, 2, 6], attn_depths=[14, 2], num_heads=8, mlp_ratio=4., **kwargs)
     model.default_cfg = default_cfgs['MetaFG_2']

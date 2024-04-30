@@ -24,6 +24,7 @@ def create_temperature_scaled_model(cfg: DictConfig) -> None:
     experiment_id = cfg["evaluate"]["experiment_id"]
     use_timm = cfg["evaluate"]["use_timm"]
     model_id = cfg["evaluate"]["model_id"]
+    use_metadata = cfg["evaluate"]["use_metadata"]
 
     print(f"creating temperature scaled model {experiment_id}")
 
@@ -37,7 +38,8 @@ def create_temperature_scaled_model(cfg: DictConfig) -> None:
     dataset_train, dataset_valid, dataset_classes = get_datasets(pretrained, image_resize, validation_frac,
                                                                  oversample=oversample, undersample=undersample,
                                                                  oversample_prop=oversample_prop,
-                                                                 equal_undersampled_val=equal_undersampled_val)
+                                                                 equal_undersampled_val=equal_undersampled_val,
+                                                                 include_metadata=use_metadata)
     _, valid_loader = get_data_loaders(dataset_train, dataset_valid, batch_size, num_dataloader_workers,
                                        balanced_sampler=balanced_sampler)
 

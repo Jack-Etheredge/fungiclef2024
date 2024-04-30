@@ -56,7 +56,7 @@ def build_model(model_id='tf_efficientnetv2_s.in21k', pretrained=True, fine_tune
         if model_id in {"MetaFG_meta_0", "MetaFG_meta_1", "MetaFG_meta_2"}:
             model = timm.create_model(
                 model_id,
-                pretrained=False,
+                # pretrained=False,
                 num_classes=num_classes,
                 drop_path_rate=0.1,  # from default
                 img_size=384,  # model should be invariant to size (within reason)
@@ -76,6 +76,7 @@ def build_model(model_id='tf_efficientnetv2_s.in21k', pretrained=True, fine_tune
                 if filename is None:
                     raise ValueError(f"no associated filename with model_id {model_id}")
                 pretrained_model_path = f"~/pretrained_models/{filenames.get(model_id)}"
+                pretrained_model_path = str(Path(pretrained_model_path).expanduser().absolute())
                 load_pretrained_metaformer(model, pretrained_model_path)
         else:
             model = timm.create_model(model_id, pretrained=pretrained)
@@ -171,7 +172,7 @@ def relative_bias_interpolate(checkpoint, image_size):
     for k in list(checkpoint['model']):
         if 'relative_position_index' in k:
             del checkpoint['model'][k]
-        if 'relative_position_bias_table' in k:
+        if 'relative_position_bias_table' in k:  # this shouldn't be the case for the metaformer models being used
             relative_position_bias_table = checkpoint['model'][k]
             cls_bias = relative_position_bias_table[:1, :]
             relative_position_bias_table = relative_position_bias_table[1:, :]

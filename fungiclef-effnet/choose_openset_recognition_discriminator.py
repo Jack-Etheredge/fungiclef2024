@@ -34,6 +34,7 @@ def choose_best_discriminator(cfg: DictConfig, project_name=None) -> Path:
     model_id = cfg["evaluate"]["model_id"]
     use_timm = cfg["evaluate"]["use_timm"]
     image_size = cfg["evaluate"]["image_size"]
+    use_metadata = cfg["evaluate"]["use_metadata"]
 
     # get embedding size from the trained evaluation (embedder) model
     nc = get_embedding_size(model_id=model_id, use_timm=use_timm)
@@ -95,7 +96,8 @@ def choose_best_discriminator(cfg: DictConfig, project_name=None) -> Path:
     # ])
 
     _, openset_dataset_val, openset_dataset_test = get_openset_datasets(pretrained=pretrained, image_size=image_size,
-                                                                        n_train=openset_n_train, n_val=openset_n_val)
+                                                                        n_train=openset_n_train, n_val=openset_n_val,
+                                                                        include_metadata=use_metadata)
     open_set_selection_loader = torch.utils.data.DataLoader(openset_dataset_val, batch_size=batch_size,
                                                             shuffle=False, num_workers=4, collate_fn=collate_fn,
                                                             timeout=worker_timeout_s)
@@ -107,12 +109,13 @@ def choose_best_discriminator(cfg: DictConfig, project_name=None) -> Path:
                                                validation_frac=validation_frac,
                                                oversample=oversample, undersample=undersample,
                                                oversample_prop=oversample_prop,
-                                               equal_undersampled_val=equal_undersampled_val)
+                                               equal_undersampled_val=equal_undersampled_val,
+                                               include_metadata=use_metadata)
     closed_set_selection_loader = torch.utils.data.DataLoader(closedset_dataset_val, batch_size=batch_size,
                                                               shuffle=False, num_workers=4,
                                                               collate_fn=collate_fn,
                                                               timeout=worker_timeout_s)
-    closedset_dataset_test = get_closedset_test_dataset(pretrained, image_size)
+    closedset_dataset_test = get_closedset_test_dataset(pretrained, image_size, use_metadata)
     closed_set_evaluation_loader = torch.utils.data.DataLoader(closedset_dataset_test, batch_size=batch_size,
                                                                shuffle=False, num_workers=4,
                                                                collate_fn=collate_fn,

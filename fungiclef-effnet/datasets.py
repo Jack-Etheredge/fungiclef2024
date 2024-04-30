@@ -8,9 +8,9 @@ https://pytorch.org/vision/stable/transforms.html#v1-or-v2-which-one-should-i-us
 import math
 import os
 import re
-import random
 from collections import Counter
-from math import radians, cos, sin, asin, sqrt, pi
+from math import radians, cos, sin, pi
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -24,8 +24,6 @@ from torch.utils.data import DataLoader, Dataset, Subset, ConcatDataset
 from torchvision.transforms.v2 import InterpolationMode
 
 from paths import DATA_DIR, METADATA_DIR
-
-random.seed(2021)
 
 countryCode = [
     'FO', 'DE', 'GA', 'CR', 'SJ', 'AT', 'IE', 'JP', 'FR', 'AU', 'PL', 'GR', 'US',
@@ -128,7 +126,7 @@ def normalize_transform(pretrained):
 
 
 def get_datasets(pretrained, image_size, validation_frac, oversample=False, undersample=False,
-                 oversample_prop=0.1, equal_undersampled_val=True, seed=42):
+                 oversample_prop=0.1, equal_undersampled_val=True, seed=42, include_metadata=False):
     """
     Function to prepare the Datasets.
     :param pretrained: Boolean, True or False.
@@ -139,12 +137,14 @@ def get_datasets(pretrained, image_size, validation_frac, oversample=False, unde
     dataset = CustomImageDataset(
         label_file_path=METADATA_DIR / "FungiCLEF2023_train_metadata_PRODUCTION.csv",
         img_dir=DATA_DIR / "DF20",
-        transform=(get_train_transform(image_size, pretrained))
+        transform=(get_train_transform(image_size, pretrained)),
+        include_metadata=include_metadata,
     )
     val_dataset = CustomImageDataset(
         label_file_path=METADATA_DIR / "FungiCLEF2023_train_metadata_PRODUCTION.csv",
         img_dir=DATA_DIR / "DF20",
-        transform=(get_valid_transform(image_size, pretrained))  # only difference
+        transform=(get_valid_transform(image_size, pretrained)),  # only difference
+        include_metadata=include_metadata,
     )
     targets = dataset.target
 
@@ -185,46 +185,94 @@ class CustomImageDataset(Dataset):
     def __init__(self, label_file_path: str, img_dir: str,
                  keep_only: set | None = None,
                  exclude: set | None = None,
-                 include_metadata=False,
                  transform=None,
-                 target_transform=None):
-        self.img_labels = pd.read_csv(label_file_path, dtype={"class_id": "int64"})
-        self.img_labels = self.img_labels[["image_path", "class_id"]]
+                 target_transform=None,
+                 include_metadata=False,
+                 metadata_from_cache=True):
+
+        self.classes = None
+        self.target = None
+        self.image_filenames = None
+        self.labels = None
+        self.metadata = []
+        self.include_metadata = include_metadata
+        self.metadata_from_cache = metadata_from_cache
         self.img_dir = img_dir
-        self.keep_only = keep_only
-        if self.keep_only is not None:
-            self.img_labels = self.img_labels[self.img_labels["class_id"].isin(self.keep_only)]
-        self.exclude = exclude
-        if self.exclude is not None:
-            self.img_labels = self.img_labels[~self.img_labels["class_id"].isin(self.exclude)]
+        self._setup_from_df(exclude, keep_only, label_file_path)
         self.transform = transform
         self.target_transform = target_transform
-        self.classes = self.img_labels["class_id"].unique()
-        self.target = self.img_labels["class_id"].values
-        self.include_metadata = include_metadata
+
+    def _setup_from_df(self, exclude, keep_only, label_file_path):
+        df = pd.read_csv(label_file_path, dtype={"class_id": "int64"})
+
+        if self.include_metadata:
+            create_metadata = True
+            write_cache = False
+            if self.metadata_from_cache:
+                cache_location = Path(self.img_dir).parent / f"{Path(self.img_dir).name}.npy"
+                if cache_location.exists():
+                    with open(cache_location, 'rb') as f:
+                        self.metadata = np.load(f)
+                    create_metadata = False
+                else:
+                    write_cache = True
+
+            if create_metadata:
+                for idx, row in df.iterrows():
+                    temporal_info = encode_temporal_info(row["month"], row["day"])
+                    # spatial_info = encode_spatial_info(row["Latitude"], row["Longitude"])
+                    countryCode_onehot_info = encode_onehot(row["countryCode"], countryCode)
+                    Substrate_onehot_info = encode_onehot(row["Substrate"], Substrate)
+                    Habitat_onehot_info = encode_onehot(row["Habitat"], Habitat)
+                    onehot_info = countryCode_onehot_info + Substrate_onehot_info + Habitat_onehot_info
+                    encoded_metadata = temporal_info + onehot_info
+                    self.metadata.append(encoded_metadata)
+
+                self.metadata = np.array(self.metadata).astype(np.float32)
+
+            if write_cache:
+                with open(cache_location, 'wb') as f:
+                    np.save(f, self.metadata)
+
+        df = df[["image_path", "class_id"]]
+
+        if keep_only is not None:
+            df = df[df["class_id"].isin(keep_only)]
+        if exclude is not None:
+            df = df[~df["class_id"].isin(exclude)]
+        self.classes = df["class_id"].unique()
+        self.target = df["class_id"].values
+        self.image_filenames = df["image_path"].values
+        self.labels = df["class_id"].values
 
     def __len__(self):
-        return len(self.img_labels)
+        return len(self.labels)
 
     def __getitem__(self, idx):
         """If an image can't be read, print the error and return None"""
         try:
-            img_path = os.path.join(self.img_dir, self.img_labels.iloc[idx, 0])
+            img_path = os.path.join(self.img_dir, self.image_filenames[idx])
             # from torchvision.io import read_image
             # image = read_image(img_path)
             # https://pytorch.org/vision/main/_modules/torchvision/datasets/folder.html#ImageFolder
             with open(img_path, "rb") as f:
                 image = Image.open(f).convert('RGB')  # hopefully this handles greyscale cases
             # image = transforms.ToPILImage()(cv2.cvtColor(cv2.imread(img_path), cv2.COLOR_BGR2RGB))
-            label = self.img_labels.iloc[idx, 1]
+            label = self.labels[idx]
             if self.transform:
                 image = self.transform(image)
             if self.target_transform:
                 label = self.target_transform(label)
+            if self.include_metadata:
+                metadata = self.metadata[idx]
+                metadata = torch.tensor(metadata, dtype=torch.float32)
         except Exception as e:
             print("issue loading image")
             print(e)
             return None
+
+        if self.include_metadata:
+            return (image, metadata), label
         return image, label
 
 
@@ -290,7 +338,8 @@ def get_data_loaders(train_dataset, val_dataset, batch_size, num_workers, balanc
     return train_loader, valid_loader
 
 
-def get_openset_datasets(pretrained, image_size, n_train=2000, n_val=200, seed=42, training_augs=False):
+def get_openset_datasets(pretrained, image_size, n_train=2000, n_val=200, seed=42, training_augs=False,
+                         include_metadata=False):
     """
     Function to prepare the Datasets.
     :param pretrained: Boolean, True or False.
@@ -305,13 +354,15 @@ def get_openset_datasets(pretrained, image_size, n_train=2000, n_val=200, seed=4
         img_dir=DATA_DIR / "DF21",
         keep_only={-1},
         transform=((get_train_transform(image_size, pretrained)) if training_augs else
-                   (get_valid_transform(image_size, pretrained)))  # this is the difference
+                   (get_valid_transform(image_size, pretrained))),  # this is the difference
+        include_metadata=include_metadata
     )
     val_test_dataset = CustomImageDataset(
         label_file_path=METADATA_DIR / "FungiCLEF2023_val_metadata_PRODUCTION.csv",
         img_dir=DATA_DIR / "DF21",
         keep_only={-1},
-        transform=(get_valid_transform(image_size, pretrained))  # this is the difference
+        transform=(get_valid_transform(image_size, pretrained)),  # this is the difference
+        include_metadata=include_metadata
     )
 
     indices = list(range(train_dataset.target.shape[0]))
@@ -328,7 +379,7 @@ def get_openset_datasets(pretrained, image_size, n_train=2000, n_val=200, seed=4
     return train_dataset, val_dataset, test_dataset
 
 
-def get_closedset_test_dataset(pretrained, image_size):
+def get_closedset_test_dataset(pretrained, image_size, include_metadata=False):
     """
     Function to prepare the Datasets.
     :param pretrained: Boolean, True or False.
@@ -340,7 +391,8 @@ def get_closedset_test_dataset(pretrained, image_size):
         label_file_path=METADATA_DIR / "FungiCLEF2023_val_metadata_PRODUCTION.csv",
         img_dir=DATA_DIR / "DF21",
         exclude={-1},
-        transform=(get_valid_transform(image_size, pretrained))
+        transform=(get_valid_transform(image_size, pretrained)),
+        include_metadata=include_metadata
     )
 
     return val_test_dataset
@@ -507,91 +559,8 @@ def encode_onehot(attr, attr_list, additional_unknown_idx=False):
     return code
 
 
-def find_images_and_targets_fungi(root, istrain=True, aux_info=True, include_genus=True):
-    if istrain:
-        df = pd.read_csv(os.path.join(root, 'train.csv'))
-        df_val = pd.read_csv(os.path.join(root, 'val.csv'))
-        df = pd.concat([df, df_val])
-    else:
-        df = pd.read_csv(os.path.join(root, 'val.csv'))
-
-    if include_genus:
-        df_train = pd.read_csv(os.path.join(root, 'train.csv'))
-        genus_names = sorted(list(set(df_train["genus"].tolist())))
-
-    images_and_targets = []
-    class_to_idx = {}
-    images_info = []
-    for idx, row in df.iterrows():
-        file_path = row["image_path"]
-        file_path = os.path.join(root, "DF20", file_path)
-        target = int(row["class_id"])
-
-        # if target > 1603 or target < 0:
-        #     continue
-
-        if include_genus:
-            try:
-                genus_target = int(genus_names.index(row["genus"]))
-            except:
-                # continue
-                genus_target = -1
-
-        if aux_info:
-            temporal_info = encode_temporal_info(row["month"], row["day"])
-            # spatial_info = encode_spatial_info(row["Latitude"], row["Longitude"])
-            countryCode_onehot_info = encode_onehot(row["countryCode"], countryCode)
-            Substrate_onehot_info = encode_onehot(row["Substrate"], Substrate)
-            Habitat_onehot_info = encode_onehot(row["Habitat"], Habitat)
-            onehot_info = countryCode_onehot_info + Substrate_onehot_info + Habitat_onehot_info
-
-            # Substrate Habitat countryCode
-            # images_and_targets.append((file_path, target, genus_target, temporal_info + spatial_info + onehot_info))
-            if include_genus:
-                images_and_targets.append((file_path, target, genus_target, temporal_info + onehot_info))
-            else:
-                images_and_targets.append((file_path, target, temporal_info + onehot_info))
-        else:
-            if include_genus:
-                images_and_targets.append((file_path, target, genus_target))
-            else:
-                images_and_targets.append((file_path, target))
-
-    print(f"number of training samples {len(images_and_targets)}")
-    return images_and_targets, class_to_idx, images_info
-
-
-def find_images_and_targets_fungi_test(root, istrain=False, aux_info=False):
-    # df = pd.read_csv(os.path.join(root, 'val.csv'))
-    df = pd.read_csv(os.path.join(root, 'test.csv'))
-    images_and_targets = []
-    class_to_idx = {}
-    images_info = []
-    for idx, row in df.iterrows():
-        file_path = row["image_path"]
-        file_path = os.path.join(root, "DF21", file_path)
-        target = 0  # fake target
-
-        if aux_info:
-            temporal_info = encode_temporal_info(row["month"], row["day"])
-            # spatial_info = encode_spatial_info(row["Latitude"], row["Longitude"])
-            countryCode_onehot_info = encode_onehot(row["countryCode"], countryCode)
-            Substrate_onehot_info = encode_onehot(row["Substrate"], Substrate)
-            Habitat_onehot_info = encode_onehot(row["Habitat"], Habitat)
-
-            onehot_info = countryCode_onehot_info + Substrate_onehot_info + Habitat_onehot_info
-            # onehot_info = Substrate_onehot_info + Habitat_onehot_info
-
-            # Substrate Habitat countryCode
-            images_and_targets.append((file_path, target, target, temporal_info + onehot_info))
-            # images_and_targets.append((file_path, target, target, temporal_info + spatial_info + onehot_info))
-        else:
-            images_and_targets.append((file_path, target))
-
-    return images_and_targets, class_to_idx, images_info
-
-
 def fungi_collate_fn(batch):
+    batch = list(filter(lambda x: x is not None, batch))
     imgs, targets, genus_targets, auxs, img_names = zip(*batch)
     imgs = torch.stack(imgs, 0)
     targets = torch.tensor(targets, dtype=torch.int64)
@@ -599,69 +568,3 @@ def fungi_collate_fn(batch):
     auxs = [torch.tensor(aux, dtype=torch.float64) for aux in auxs]
     auxs = torch.stack(auxs, dim=0)
     return imgs, targets, genus_targets, auxs, img_names
-
-
-class DatasetMeta(Dataset):
-    def __init__(
-            self,
-            root,
-            load_bytes=False,
-            transform=None,
-            train=False,
-            aux_info=False,
-            dataset='fungi',
-            class_ratio=1.0,
-            per_sample=1.0):
-        self.aux_info = aux_info
-        self.dataset = dataset
-        if dataset == 'fungi':
-            images, class_to_idx, images_info = find_images_and_targets_fungi(root, train, aux_info)
-        elif dataset == 'fungi_test':
-            images, class_to_idx, images_info = find_images_and_targets_fungi_test(root, train, aux_info)
-        if len(images) == 0:
-            raise RuntimeError(f'Found 0 images in subfolders of {root}. '
-                               f'Supported image extensions are {", ".join(IMG_EXTENSIONS)}')
-        self.root = root
-        self.samples = images
-        self.imgs = self.samples  # torchvision ImageFolder compat
-        self.class_to_idx = class_to_idx
-        self.images_info = images_info
-        self.load_bytes = load_bytes
-        self.transform = transform
-        self.dataset = dataset
-
-    def __getitem__(self, index):
-        if self.aux_info:
-            path, target, genus_target, aux_info = self.samples[index]
-        else:
-            path, target = self.samples[index]
-        try:
-            img = open(path, 'rb').read() if self.load_bytes else Image.open(path).convert('RGB')
-        except:
-            try:
-                path = path.replace('DF20', 'DF21')
-                img = open(path, 'rb').read() if self.load_bytes else Image.open(path).convert('RGB')
-            except:
-                path = path.replace('DF21', 'DF20')
-                img = open(path, 'rb').read() if self.load_bytes else Image.open(path).convert('RGB')
-        if self.transform is not None:
-            img = self.transform(img)
-        if self.aux_info:
-            if type(aux_info) is np.ndarray:
-                select_index = np.random.randint(aux_info.shape[0])
-                return img, target, genus_target, aux_info[select_index, :], os.path.basename(path)
-            else:
-                return img, target, genus_target, np.asarray(aux_info).astype(np.float64), os.path.basename(path)
-        else:
-            return img, target
-
-    def __len__(self):
-        return len(self.samples)
-
-
-if __name__ == '__main__':
-    images_and_targets, class_to_idx, images_info = find_images_and_targets_fungi("~/datasets/fungiclef2024/data/",
-                                                                                  istrain=False, aux_info=True)
-    # class_to_idx, images_info both empty
-    for i in range(100):
-        print(images_and_targets[i])

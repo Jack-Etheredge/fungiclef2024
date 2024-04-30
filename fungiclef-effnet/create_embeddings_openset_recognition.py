@@ -20,6 +20,7 @@ def create_embeddings(cfg: DictConfig) -> None:
     model_id = cfg["evaluate"]["model_id"]
     use_timm = cfg["evaluate"]["use_timm"]
     image_size = cfg["evaluate"]["image_size"]
+    use_metadata = cfg["evaluate"]["use_metadata"]
 
     # embedder setup
     embedder_layer_offset = cfg["open-set-recognition"]["embedder_layer_offset"]
@@ -69,7 +70,8 @@ def create_embeddings(cfg: DictConfig) -> None:
     feature_extractor = torch.nn.Sequential(*list(model.children())[:embedder_layer_offset])
 
     openset_dataset_train, _, _ = get_openset_datasets(pretrained=pretrained, image_size=image_size,
-                                                       n_train=openset_n_train, n_val=openset_n_val)
+                                                       n_train=openset_n_train, n_val=openset_n_val,
+                                                       include_metadata=use_metadata)
     openset_loader = torch.utils.data.DataLoader(openset_dataset_train, batch_size=batch_size,
                                                  shuffle=False, num_workers=n_workers, collate_fn=collate_fn,
                                                  timeout=worker_timeout_s)
@@ -77,7 +79,8 @@ def create_embeddings(cfg: DictConfig) -> None:
                                            validation_frac=validation_frac,
                                            oversample=oversample, undersample=undersample,
                                            oversample_prop=oversample_prop,
-                                           equal_undersampled_val=equal_undersampled_val)
+                                           equal_undersampled_val=equal_undersampled_val,
+                                           include_metadata=use_metadata)
     closedset_dataset = Subset(closedset_dataset,
                                np.random.choice(closedset_dataset.target.shape[0], closedset_n_train, replace=False))
     closedset_loader = torch.utils.data.DataLoader(closedset_dataset, batch_size=batch_size,
