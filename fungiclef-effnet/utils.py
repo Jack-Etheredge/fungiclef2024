@@ -2,7 +2,9 @@
 modified from https://debuggercafe.com/transfer-learning-using-efficientnet-pytorch/
 """
 
+import datetime
 import random
+import shutil
 from pathlib import Path
 
 import torch
@@ -157,3 +159,11 @@ def build_models(nz, ngf, nc, ndf, device, n_gpu):
     net_d.apply(weights_init)
     net_g.apply(weights_init)
     return net_g, net_d
+
+
+def copy_config(script_name, experiment_id):
+    now_dt = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    experiment_dir = Path("model_checkpoints") / experiment_id
+    config_from = Path("conf") / "config.yaml"
+    config_to = experiment_dir / f"config_{script_name}_{now_dt}.yaml"
+    shutil.copyfile(config_from, config_to)

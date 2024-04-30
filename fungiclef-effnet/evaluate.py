@@ -23,6 +23,7 @@ from datasets import get_valid_transform
 from paths import METADATA_DIR, VAL_DATA_DIR
 from temperature_scaling import ModelWithTemperature
 from temp_scale_model import create_temperature_scaled_model
+from utils import copy_config
 
 np.set_printoptions(precision=5)
 ImageFile.LOAD_TRUNCATED_IMAGES = True
@@ -380,6 +381,8 @@ if __name__ == "__main__":
     image_size = cfg["evaluate"]["image_size"]
 
     TRANSFORMS = get_valid_transform(image_size=image_size, pretrained=True)
+
+    copy_config("evaluate", experiment_id)
 
     outputs_precomputed = False
     print(f"evaluating experiment {experiment_id}")

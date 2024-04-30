@@ -23,7 +23,7 @@ from paths import CHECKPOINT_DIR
 from closedset_model import build_model, unfreeze_model, update_dropout_rate
 from datasets import get_datasets, get_data_loaders, get_dataloader_combine_and_balance_datasets, get_openset_datasets
 from evaluate import evaluate_experiment
-from utils import save_plots, checkpoint_model
+from utils import save_plots, checkpoint_model, copy_config
 from losses import SeesawLoss, SupConLoss, CompositeLoss
 
 
@@ -230,6 +230,7 @@ def train_model(cfg: DictConfig) -> None:
     config_dict = OmegaConf.to_container(cfg, resolve=True)
     with open(str(experiment_dir / "experiment_config.json"), "w") as f:
         json.dump(config_dict, f)
+    copy_config("train_progressive_metaformer", experiment_id)
 
     image_size, dropout_rate, batch_size = get_progression_params(cfg, epoch=0)
 

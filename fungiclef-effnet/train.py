@@ -23,7 +23,7 @@ from paths import CHECKPOINT_DIR
 from closedset_model import build_model, unfreeze_model
 from datasets import get_datasets, get_data_loaders, get_dataloader_combine_and_balance_datasets, get_openset_datasets
 from evaluate import evaluate_experiment
-from utils import save_plots, checkpoint_model
+from utils import copy_config, save_plots, checkpoint_model
 from losses import SeesawLoss, SupConLoss, CompositeLoss
 
 
@@ -183,6 +183,7 @@ def train_model(cfg: DictConfig) -> None:
     config_dict = OmegaConf.to_container(cfg, resolve=True)
     with open(str(experiment_dir / "experiment_config.json"), "w") as f:
         json.dump(config_dict, f)
+    copy_config("train", experiment_id)
 
     # torch.autograd.set_detect_anomaly(True)
 
