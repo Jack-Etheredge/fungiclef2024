@@ -18,7 +18,6 @@ def create_embeddings(cfg: DictConfig) -> None:
     # select embedder from evaluate experiment_id
     embedder_experiment_id = cfg["evaluate"]["experiment_id"]
     model_id = cfg["evaluate"]["model_id"]
-    use_timm = cfg["evaluate"]["use_timm"]
     image_size = cfg["evaluate"]["image_size"]
     use_metadata = cfg["evaluate"]["use_metadata"]
 
@@ -59,7 +58,6 @@ def create_embeddings(cfg: DictConfig) -> None:
         num_classes=n_classes,
         dropout_rate=0.5,  # doesn't matter since embeddings will be created in eval on a fixed model
         model_id=model_id,
-        use_timm=use_timm,
     ).to(device)
     experiment_dir = CHECKPOINT_DIR / embedder_experiment_id
     experiment_dir.mkdir(parents=True, exist_ok=True)
@@ -67,7 +65,7 @@ def create_embeddings(cfg: DictConfig) -> None:
     checkpoint = torch.load(model_file_path)
     model.load_state_dict(checkpoint['model_state_dict'])
     model.eval()
-    feature_extractor = torch.nn.Sequential(*list(model.children())[:embedder_layer_offset])
+    # feature_extractor = torch.nn.Sequential(*list(model.children())[:embedder_layer_offset])
 
     openset_dataset_train, _, _ = get_openset_datasets(pretrained=pretrained, image_size=image_size,
                                                        n_train=openset_n_train, n_val=openset_n_val,
@@ -94,7 +92,7 @@ def create_embeddings(cfg: DictConfig) -> None:
             images, _ = data
             images = images.to(device)
             # calculate outputs by running images through the network
-            outputs = feature_extractor(images).detach().cpu().numpy()
+            outputs = model.forward_head(model.forward_features(images), pre_logits=True).detach().cpu().numpy()
             embeddings.append(outputs)
     embeddings = np.concatenate(embeddings).squeeze()
     with h5py.File(openset_embedding_output_path, 'w') as hf:
@@ -108,7 +106,7 @@ def create_embeddings(cfg: DictConfig) -> None:
             images, _ = data
             images = images.to(device)
             # calculate outputs by running images through the network
-            outputs = feature_extractor(images).detach().cpu().numpy()
+            outputs = model.forward_features(images).detach().cpu().numpy()
             embeddings.append(outputs)
     embeddings = np.concatenate(embeddings).squeeze()
     with h5py.File(closedset_embedding_output_path, 'w') as hf:

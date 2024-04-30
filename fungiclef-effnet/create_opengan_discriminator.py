@@ -6,7 +6,7 @@ from hydra import compose, initialize
 from omegaconf import DictConfig, OmegaConf
 from torch import nn
 
-from choose_openset_recognition_discriminator import choose_best_discriminator, create_feature_extractor_from_model, \
+from choose_openset_recognition_discriminator import choose_best_discriminator, \
     load_model_for_inference
 from closedset_model import get_embedding_size
 from create_embeddings_openset_recognition import create_embeddings
@@ -24,23 +24,26 @@ class CompositeOpenGANInferenceModel(nn.Module):
             NOT the softmax (or log softmax)!
     """
 
-    def __init__(self, model, opengan_discriminator, embedder_layer_offset, openset_label):
+    def __init__(self, model, opengan_discriminator, openset_label):
         super().__init__()
         self.model = model
         self.opengan_discriminator = opengan_discriminator
-        self.feature_extractor = create_feature_extractor_from_model(model, embedder_layer_offset)
         self.openset_label = openset_label
 
     def forward(self, input):
-        model_preds = torch.argmax(self.model(input), dim=1)
+        intermediate_features = self.model.forward_features(input).squeeze()
+        final_features = self.model.forward_head(intermediate_features, pre_logits=True)
+        if final_features.dim() == 1:
+            final_features = final_features.unsqueeze(0)
+
+        model_probas = self.model.forward_head(intermediate_features, pre_logits=False)
+        model_preds = torch.argmax(model_probas, dim=1)
         if model_preds.dim() == 1:
             model_preds = model_preds.unsqueeze(0)
-        penultimate_layer_output = self.feature_extractor(input).squeeze()
-        if penultimate_layer_output.dim() == 1:
-            penultimate_layer_output = penultimate_layer_output.unsqueeze(0)
+
         # opengan_preds = (self.opengan_discriminator(penultimate_layer_output) > 0.5).int()
         # model_preds[opengan_preds == self.openset_label] = -1
-        opengan_probas = self.opengan_discriminator(penultimate_layer_output)
+        opengan_probas = self.opengan_discriminator(final_features)
         return model_preds, opengan_probas
 
 
@@ -49,19 +52,18 @@ def create_composite_model(cfg: DictConfig) -> nn.Module:
     experiment_dir = CHECKPOINT_DIR / experiment_id
     hidden_dim = cfg["open-set-recognition"]["hidden_dim_d"]
     model_id = cfg["evaluate"]["model_id"]
-    use_timm = cfg["evaluate"]["use_timm"]
     n_classes = cfg["train"]["n_classes"]
     openset_label = cfg["open-set-recognition"]["openset_label"]
     embedder_layer_offset = cfg["open-set-recognition"]["embedder_layer_offset"]
 
     # get embedding size from the trained evaluation (embedder) model
-    nc = get_embedding_size(model_id=model_id, use_timm=use_timm)
+    nc = get_embedding_size(model_id=model_id)
 
     # set device, which gpu to use.
     device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
     print(f"using device {device}")
 
-    model = load_model_for_inference(device, experiment_dir, model_id, n_classes, use_timm)
+    model = load_model_for_inference(device, experiment_dir, model_id, n_classes)
     opengan_model = load_opengan_discriminator(device, experiment_dir, hidden_dim, nc)
     composite_model = CompositeOpenGANInferenceModel(model, opengan_model, embedder_layer_offset, openset_label)
     # torch.save(composite_model, "opengan_composite_model.pth")

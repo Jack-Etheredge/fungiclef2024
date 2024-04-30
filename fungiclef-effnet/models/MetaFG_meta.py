@@ -308,6 +308,11 @@ class MetaFG_Meta(nn.Module):
             logits = self.head(x)
         return logits
 
+    def forward_head(self, x, pre_logits=True):
+        if pre_logits:
+            return x
+        return self.head(x)
+
 
 def filter_kwargs(kwargs):
     del kwargs["pretrained_cfg"]

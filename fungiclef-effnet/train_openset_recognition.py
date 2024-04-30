@@ -117,9 +117,8 @@ def main(cfg: DictConfig) -> None:
     closedset_embedding_output_path = EMBEDDINGS_DIR / closedset_embeddings_name
 
     model_id = cfg["evaluate"]["model_id"]
-    use_timm = cfg["evaluate"]["use_timm"]
     # get embedding size from the trained evaluation (embedder) model
-    embedding_size = get_embedding_size(model_id=model_id, use_timm=use_timm)
+    embedding_size = get_embedding_size(model_id=model_id)
 
     # TODO: move these params to hydra
     exp_dir = Path(

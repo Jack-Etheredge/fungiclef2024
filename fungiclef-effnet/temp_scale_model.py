@@ -22,7 +22,6 @@ def create_temperature_scaled_model(cfg: DictConfig) -> None:
     balanced_sampler = cfg["train"]["balanced_sampler"]
 
     experiment_id = cfg["evaluate"]["experiment_id"]
-    use_timm = cfg["evaluate"]["use_timm"]
     model_id = cfg["evaluate"]["model_id"]
     use_metadata = cfg["evaluate"]["use_metadata"]
 
@@ -49,7 +48,6 @@ def create_temperature_scaled_model(cfg: DictConfig) -> None:
         fine_tune=False,
         num_classes=n_classes,  # this is all that matters. everything else will be overwritten by checkpoint state
         dropout_rate=0.5,
-        use_timm=use_timm,
     ).to(device)
     model.eval()
     checkpoint = torch.load(checkpoint_path)

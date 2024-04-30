@@ -150,8 +150,7 @@ def train_openganfea(cfg: DictConfig) -> str:
 
     # get embedding size from the trained evaluation (embedder) model
     model_id = cfg["evaluate"]["model_id"]
-    use_timm = cfg["evaluate"]["use_timm"]
-    nc = get_embedding_size(model_id=model_id, use_timm=use_timm)
+    nc = get_embedding_size(model_id=model_id)
 
     # experiment directory, used for reading the init model
     # TODO: move this to the paths.py module

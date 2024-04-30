@@ -62,14 +62,13 @@ class PytorchWorker:
     """Run inference using PyTorch."""
 
     def __init__(self, model_path: str, number_of_categories: int = 1604, temp_scaling=False,
-                 model_id="efficientnet_b0", use_timm=True, device="cpu"):
+                 model_id="efficientnet_b0", device="cpu"):
 
         ########################################
         # must be set before calling _load_model
         self.number_of_categories = number_of_categories
         self.temp_scaling = temp_scaling
         self.model_id = model_id
-        self.use_timm = use_timm
         self.device = device
         ########################################
 
@@ -88,7 +87,6 @@ class PytorchWorker:
             num_classes=self.number_of_categories,
             # this is all that matters. everything else will be overwritten by checkpoint state
             dropout_rate=0.5,
-            use_timm=self.use_timm,
         ).to(self.device)
         model_ckpt = torch.load(model_path, map_location=self.device)
         if self.temp_scaling:
@@ -121,14 +119,12 @@ def make_submission(test_metadata, model_path, output_csv_path, images_root_path
     print(f"Using devide: {device}")
 
     model_id = cfg["evaluate"]["model_id"]
-    use_timm = cfg["evaluate"]["use_timm"]
 
     # Consolidate the model building logic
     if opengan:
         model = create_composite_model(cfg).to(device)
     else:
-        model = PytorchWorker(model_path, temp_scaling=temp_scaling, model_id=model_id, use_timm=use_timm,
-                              device=device)
+        model = PytorchWorker(model_path, temp_scaling=temp_scaling, model_id=model_id, device=device)
 
     # this allows use on both validation and test
     test_metadata.rename(columns={"observationID": "observation_id"}, inplace=True)
@@ -376,7 +372,6 @@ if __name__ == "__main__":
     print(OmegaConf.to_yaml(cfg))
 
     experiment_id = cfg["evaluate"]["experiment_id"]
-    use_timm = cfg["evaluate"]["use_timm"]
     model_id = cfg["evaluate"]["model_id"]
     image_size = cfg["evaluate"]["image_size"]
 
@@ -385,14 +380,14 @@ if __name__ == "__main__":
     copy_config("evaluate", experiment_id)
 
     outputs_precomputed = False
-    print(f"evaluating experiment {experiment_id}")
-    evaluate_experiment(cfg=cfg, experiment_id=experiment_id, from_outputs=outputs_precomputed)
-    print("creating temperature scaled model")
-    create_temperature_scaled_model(cfg)
-    print(f"evaluating experiment {experiment_id} with temperature scaling")
-    evaluate_experiment(cfg=cfg, experiment_id=experiment_id, temperature_scaling=True,
-                        from_outputs=outputs_precomputed)
-    print("training openGAN model")
+    # print(f"evaluating experiment {experiment_id}")
+    # evaluate_experiment(cfg=cfg, experiment_id=experiment_id, from_outputs=outputs_precomputed)
+    # print("creating temperature scaled model")
+    # create_temperature_scaled_model(cfg)
+    # print(f"evaluating experiment {experiment_id} with temperature scaling")
+    # evaluate_experiment(cfg=cfg, experiment_id=experiment_id, temperature_scaling=True,
+    #                     from_outputs=outputs_precomputed)
+    # print("training openGAN model")
     train_and_select_discriminator(cfg)
     print(f"evaluating experiment {experiment_id} with openGAN")
     evaluate_experiment(cfg=cfg, experiment_id=experiment_id, opengan=True, from_outputs=outputs_precomputed)

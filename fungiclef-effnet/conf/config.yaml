@@ -2,7 +2,6 @@
 train:
   experiment_id: null
   model_id: "MetaFG_meta_0"
-  use_timm: True
   epochs: 200
   lr: 1e-3  # found with lr finder, stepping down by 1/10 after loader failure
   lr_after_unfreeze: 1e-5
@@ -60,8 +59,7 @@ open-set-recognition:
   openset_label: 0
   closedset_label: 1
 evaluate:
-  experiment_id: "2024-04-26 13:31:54.470604"
-  model_id: "tf_efficientnetv2_s.in21k"
+  experiment_id: "2024-04-26 13:31:54.470604"  # "2024-04-28 23:56:00.910245" (metaformer)
+  model_id: "tf_efficientnetv2_s.in21k"  # "MetaFG_meta_0"  # "tf_efficientnetv2_s.in21k"
   use_metadata: False
-  use_timm: True
   image_size: 380

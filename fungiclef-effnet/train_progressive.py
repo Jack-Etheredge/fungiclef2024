@@ -159,7 +159,6 @@ def get_progression_params(cfg, epoch):
 def train_model(cfg: DictConfig) -> None:
     print(OmegaConf.to_yaml(cfg))
     model_id = cfg["train"]["model_id"]
-    use_timm = cfg["train"]["use_timm"]
     epochs = cfg["train"]["epochs"]
     lr = cfg["train"]["lr"]
     pretrained = cfg["train"]["pretrained"]
@@ -226,7 +225,6 @@ def train_model(cfg: DictConfig) -> None:
         fine_tune=not fine_tune_after_n_epochs or skip_frozen_epochs_load_failed_model,
         num_classes=n_classes,
         dropout_rate=dropout_rate,
-        use_timm=use_timm,
     ).to(device)
 
     # TODO: refine/replace this logic

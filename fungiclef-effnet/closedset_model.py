@@ -43,48 +43,43 @@ class GaussianNoise(nn.Module):
 
 
 def build_model(model_id='tf_efficientnetv2_s.in21k', pretrained=True, fine_tune=True, num_classes=10,
-                dropout_rate=0.5,
-                use_timm=True):
+                dropout_rate=0.5):
     """
-    Unfortunately some early experiments were run without timm and the state dict keys don't match.
+    Build model using the timm.create_model function.
+    Model is built with a dropout layer before the output linear layer, which can effectively be bypassed by setting
+    the dropout_rate to 0.0.
     """
     if pretrained:
         print('Loading pre-trained weights')
     else:
         print('Not loading pre-trained weights')
-    if use_timm:
-        if model_id in {"MetaFG_meta_0", "MetaFG_meta_1", "MetaFG_meta_2"}:
-            model = timm.create_model(
-                model_id,
-                # pretrained=False,
-                num_classes=num_classes,
-                drop_path_rate=0.1,  # from default
-                img_size=384,  # model should be invariant to size (within reason)
-                only_last_cls=False,  # from default
-                extra_token_num=5,  # from model config
-                meta_dims=[4, 34, 32, 31],  # temporal dims, country codes, substrates, habitats
-                use_arcface=False,  # from default
-                never_mask=False,  # from default
-            )
-            # print(f"built {model_id}. loading pretrained weights into model will need to be performed separately.")
-            if pretrained:
-                # TODO: consider moving this pathing to hydra config
-                filenames = {"MetaFG_meta_0": "metafg_0_inat21_384.pth",
-                             "MetaFG_meta_1": None,
-                             "MetaFG_meta_2": "metafg_0_inat21_384.pth", }
-                filename = filenames.get(model_id)
-                if filename is None:
-                    raise ValueError(f"no associated filename with model_id {model_id}")
-                pretrained_model_path = f"~/pretrained_models/{filenames.get(model_id)}"
-                pretrained_model_path = str(Path(pretrained_model_path).expanduser().absolute())
-                load_pretrained_metaformer(model, pretrained_model_path)
-        else:
-            model = timm.create_model(model_id, pretrained=pretrained)
+    if model_id in {"MetaFG_meta_0", "MetaFG_meta_1", "MetaFG_meta_2"}:
+        model = timm.create_model(
+            model_id,
+            # pretrained=False,
+            num_classes=num_classes,
+            drop_path_rate=0.1,  # from default
+            img_size=384,  # model should be invariant to size (within reason)
+            only_last_cls=False,  # from default
+            extra_token_num=5,  # from model config
+            meta_dims=[4, 34, 32, 31],  # temporal dims, country codes, substrates, habitats
+            use_arcface=False,  # from default
+            never_mask=False,  # from default
+        )
+        # print(f"built {model_id}. loading pretrained weights into model will need to be performed separately.")
+        if pretrained:
+            # TODO: consider moving this pathing to hydra config
+            filenames = {"MetaFG_meta_0": "metafg_0_inat21_384.pth",
+                         "MetaFG_meta_1": None,
+                         "MetaFG_meta_2": "metafg_0_inat21_384.pth", }
+            filename = filenames.get(model_id)
+            if filename is None:
+                raise ValueError(f"no associated filename with model_id {model_id}")
+            pretrained_model_path = f"~/pretrained_models/{filenames.get(model_id)}"
+            pretrained_model_path = str(Path(pretrained_model_path).expanduser().absolute())
+            load_pretrained_metaformer(model, pretrained_model_path)
     else:
-        print(("WARNING: this is a legacy option for evaluation of some of the earliest trained models in this repo."
-               "Make sure this is what you wanted to do."))
-        model = models.efficientnet_b0(weights='DEFAULT' if pretrained else None)
-        # model = models.efficientnet_v2_s(weights='DEFAULT' if pretrained else None)
+        model = timm.create_model(model_id, pretrained=pretrained)
     if fine_tune:
         print('Fine-tuning all layers...')
         for params in model.parameters():
@@ -94,17 +89,15 @@ def build_model(model_id='tf_efficientnetv2_s.in21k', pretrained=True, fine_tune
         for params in model.parameters():
             params.requires_grad = False
     # Change the final classification head.
-    if use_timm:
-        try:
-            model.classifier = nn.Sequential(nn.Dropout(p=dropout_rate, inplace=True),
-                                             nn.Linear(in_features=model.classifier.in_features,
-                                                       out_features=num_classes))
-        except:
-            model.head = nn.Sequential(nn.Dropout(p=dropout_rate, inplace=True),
-                                       nn.Linear(in_features=model.head.in_features, out_features=num_classes))
+    if hasattr(model, "classifier"):
+        model.classifier = nn.Sequential(nn.Dropout(p=dropout_rate, inplace=True),
+                                         nn.Linear(in_features=model.classifier.in_features,
+                                                   out_features=num_classes))
+    elif hasattr(model, "head"):
+        model.head = nn.Sequential(nn.Dropout(p=dropout_rate, inplace=True),
+                                   nn.Linear(in_features=model.head.in_features, out_features=num_classes))
     else:
-        model.classifier[0] = nn.Dropout(p=dropout_rate, inplace=True)
-        model.classifier[1] = nn.Linear(in_features=model.classifier.in_features, out_features=num_classes)
+        raise ValueError("Model doesn't contain head or classifier and thus doesn't conform to expected API.")
     return model
 
 
@@ -116,11 +109,11 @@ def update_dropout_rate(model, dropout_rate):
     return model
 
 
-def get_embedding_size(model_id='tf_efficientnetv2_s.in21k', use_timm=True):
+def get_embedding_size(model_id):
     """
     Unfortunately some early experiments were run without timm and the state dict keys don't match.
     """
-    model = build_model(model_id=model_id, pretrained=False, use_timm=use_timm)
+    model = build_model(model_id=model_id, pretrained=False)
     try:
         embedding_size = model.classifier.in_features
     except:
