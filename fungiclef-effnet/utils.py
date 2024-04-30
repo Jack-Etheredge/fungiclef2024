@@ -167,3 +167,20 @@ def copy_config(script_name, experiment_id):
     config_from = Path("conf") / "config.yaml"
     config_to = experiment_dir / f"config_{script_name}_{now_dt}.yaml"
     shutil.copyfile(config_from, config_to)
+
+
+def get_features_from_inputs(image, model, device):
+    """
+    get features (intermediate representation before classification) from the model.
+    handles both the case of metadata being present or not.
+    """
+    if isinstance(image, list):
+        image, metadata = image
+        metadata = metadata.to(device)
+        image = image.to(device)
+        outputs = model.forward_head(model.forward_features(image, metadata), pre_logits=True)
+    else:
+        image = image.to(device)
+        outputs = model.forward_head(model.forward_features(image), pre_logits=True)
+
+    return outputs
