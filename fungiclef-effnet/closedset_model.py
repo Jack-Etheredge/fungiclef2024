@@ -101,11 +101,28 @@ def build_model(model_id='tf_efficientnetv2_s.in21k', pretrained=True, fine_tune
     return model
 
 
+def load_model_for_inference(device, experiment_dir, model_id, n_classes):
+    model = build_model(
+        pretrained=False,  # doesn't matter since the weights will be updated by the checkpoint
+        fine_tune=False,  # we don't need to unfreeze any weights
+        num_classes=n_classes,
+        dropout_rate=0.0,  # doesn't matter for eval since pytorch will use identity at inference
+        model_id=model_id,
+    ).to(device)
+    model_file_path = str(experiment_dir / f"model.pth")
+    checkpoint = torch.load(model_file_path)
+    model.load_state_dict(checkpoint['model_state_dict'])
+    model.eval()
+    return model
+
+
 def update_dropout_rate(model, dropout_rate):
-    try:
+    if hasattr(model, "classifier"):
         model.classifier[0] = nn.Dropout(p=dropout_rate, inplace=True)
-    except:
+    elif hasattr(model, "head"):
         model.head[0] = nn.Dropout(p=dropout_rate, inplace=True)
+    else:
+        raise ValueError("Model has neither head nor classifier attributes.")
     return model
 
 

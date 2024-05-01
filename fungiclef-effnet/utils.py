@@ -36,13 +36,14 @@ def save_model(epochs, model, optimizer, criterion, pretrained, model_path):
     }, model_path)
 
 
-def checkpoint_model(epochs, model, optimizer, criterion, validation_loss, file_path):
+def checkpoint_model(epochs, model, dropout_rate, optimizer, criterion, validation_loss, file_path):
     """
     Function to save the trained model to disk.
     """
     torch.save({
         'epoch': epochs,
         'model_state_dict': model.state_dict(),
+        'dropout_rate': dropout_rate,
         'optimizer_state_dict': optimizer.state_dict(),
         'loss': criterion,
         'validation_loss': validation_loss,

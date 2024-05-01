@@ -8,7 +8,6 @@ from hydra import compose, initialize
 from omegaconf import OmegaConf
 from sklearn.metrics import accuracy_score, balanced_accuracy_score, f1_score, roc_auc_score
 from tqdm import tqdm
-from torchvision.transforms import v2
 from PIL import Image
 import torch
 from pathlib import Path
@@ -19,7 +18,7 @@ from scipy.stats import entropy
 from closedset_model import build_model
 from competition_metrics import evaluate
 from create_opengan_discriminator import train_and_select_discriminator, create_composite_model
-from datasets import get_valid_transform
+from datasets import get_valid_transform, encode_metadata_row
 from paths import METADATA_DIR, VAL_DATA_DIR
 from temperature_scaling import ModelWithTemperature
 from temp_scale_model import create_temperature_scaled_model
@@ -41,21 +40,6 @@ def get_threshold(max_prob_list, k):
     min_th = q1 - k * iqr
 
     return min_th
-
-
-def get_penultimate_layer_output(model, image):
-    penultimate_layer_output = None
-
-    def get_input():
-        def hook(model, input, output):
-            penultimate_layer_output = input[0].detach()
-
-        return hook
-
-    model.classifier.register_forward_hook(get_input())
-    outputs = model(image)
-
-    return outputs, penultimate_layer_output
 
 
 class PytorchWorker:
@@ -84,9 +68,9 @@ class PytorchWorker:
             model_id=self.model_id,
             pretrained=False,
             fine_tune=False,
-            num_classes=self.number_of_categories,
             # this is all that matters. everything else will be overwritten by checkpoint state
-            dropout_rate=0.5,
+            num_classes=self.number_of_categories,
+            dropout_rate=0.0,  # doesn't matter for eval since pytorch will use identity at inference
         ).to(self.device)
         model_ckpt = torch.load(model_path, map_location=self.device)
         if self.temp_scaling:
@@ -97,14 +81,21 @@ class PytorchWorker:
 
         return model.to(self.device).eval()
 
-    def predict_image(self, image: np.ndarray) -> list():
+    def predict_image(self, image: np.ndarray, metadata_row=None) -> list():
         """Run inference using ONNX runtime.
 
         :param image: Input image as numpy array.
+        :param metadata_row: Input metadata encoded for model.
         :return: A list with logits and confidences.
         """
 
-        logits = self.model(self.transforms(image).unsqueeze(0).to(self.device))
+        transformed_images = self.transforms(image).unsqueeze(0).to(self.device)
+
+        if metadata_row is not None:
+            transformed_metadata = metadata_row.unsqueeze(0).to(self.device)
+            logits = self.model(transformed_images, transformed_metadata)
+        else:
+            logits = self.model(transformed_images)
 
         return logits.tolist()
 
@@ -133,19 +124,30 @@ def make_submission(test_metadata, model_path, output_csv_path, images_root_path
     predictions = []
     max_probas = []
     entropy_scores = []
-    image_paths = test_metadata["image_path"]
+
     with torch.no_grad():
-        for image_path in tqdm(image_paths):
+        for i, row in tqdm(test_metadata.iterrows(), total=len(test_metadata)):
+            image_path = row["image_path"]
             try:
                 image_path = os.path.join(images_root_path, image_path)
                 test_image = Image.open(image_path).convert("RGB")
                 if opengan:
-                    pred, proba = model(TRANSFORMS(test_image).unsqueeze(0).to(device))
+                    if cfg["evaluate"]["use_metadata"]:
+                        encoded_metadata_row = torch.tensor(np.array(encode_metadata_row(row)),
+                                                            dtype=torch.float32).unsqueeze(0).to(device)
+                        transformed_image = TRANSFORMS(test_image).unsqueeze(0).to(device)
+                        pred, proba = model(transformed_image, encoded_metadata_row)
+                    else:
+                        pred, proba = model(TRANSFORMS(test_image).unsqueeze(0).to(device))
                     # TODO: .item() solution is brittle and won't work once multiple images are fed in a batch
                     predictions.append(pred.item())
                     max_probas.append(proba.item())
                 else:
-                    logits = model.predict_image(test_image)
+                    if cfg["evaluate"]["use_metadata"]:
+                        encoded_metadata_row = torch.tensor(np.array(encode_metadata_row(row)), dtype=torch.float32)
+                        logits = model.predict_image(test_image, encoded_metadata_row)
+                    else:
+                        logits = model.predict_image(test_image)
                     probas = softmax(logits)
                     entropy_score = entropy(probas.squeeze())
                     predictions.append(np.argmax(probas))
@@ -380,15 +382,17 @@ if __name__ == "__main__":
     copy_config("evaluate", experiment_id)
 
     outputs_precomputed = False
+
     print(f"evaluating experiment {experiment_id}")
     evaluate_experiment(cfg=cfg, experiment_id=experiment_id, from_outputs=outputs_precomputed)
-    # print("creating temperature scaled model")
-    # create_temperature_scaled_model(cfg)
-    # print(f"evaluating experiment {experiment_id} with temperature scaling")
-    # evaluate_experiment(cfg=cfg, experiment_id=experiment_id, temperature_scaling=True,
-    #                     from_outputs=outputs_precomputed)
-    # print("training openGAN model")
+
+    print("creating temperature scaled model")
+    create_temperature_scaled_model(cfg)
+    print(f"evaluating experiment {experiment_id} with temperature scaling")
+    evaluate_experiment(cfg=cfg, experiment_id=experiment_id, temperature_scaling=True,
+                        from_outputs=outputs_precomputed)
+
+    print("training openGAN model")
     train_and_select_discriminator(cfg)
     print(f"evaluating experiment {experiment_id} with openGAN")
     evaluate_experiment(cfg=cfg, experiment_id=experiment_id, opengan=True, from_outputs=outputs_precomputed)
-    # evaluate_experiment(cfg=cfg, experiment_id=experiment_id, opengan=True, from_outputs=True)

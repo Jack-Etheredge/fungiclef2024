@@ -3,7 +3,7 @@ from hydra import compose, initialize
 
 from temperature_scaling import ModelWithTemperature
 from omegaconf import DictConfig, OmegaConf
-from closedset_model import build_model
+from closedset_model import load_model_for_inference
 from paths import CHECKPOINT_DIR
 from datasets import get_data_loaders, get_datasets
 
@@ -30,7 +30,6 @@ def create_temperature_scaled_model(cfg: DictConfig) -> None:
     device = ('cuda:0' if torch.cuda.is_available() else 'cpu')
 
     experiment_dir = CHECKPOINT_DIR / experiment_id
-    checkpoint_path = experiment_dir / "model.pth"
     temp_scaled_model_filename = experiment_dir / "model_with_temperature.pth"
 
     # Load the training and validation datasets.
@@ -42,16 +41,7 @@ def create_temperature_scaled_model(cfg: DictConfig) -> None:
     _, valid_loader = get_data_loaders(dataset_train, dataset_valid, batch_size, num_dataloader_workers,
                                        balanced_sampler=balanced_sampler)
 
-    model = build_model(
-        model_id=model_id,
-        pretrained=False,
-        fine_tune=False,
-        num_classes=n_classes,  # this is all that matters. everything else will be overwritten by checkpoint state
-        dropout_rate=0.5,
-    ).to(device)
-    model.eval()
-    checkpoint = torch.load(checkpoint_path)
-    model.load_state_dict(checkpoint['model_state_dict'])
+    model = load_model_for_inference(device, experiment_dir, model_id, n_classes)
     temp_scaled_model = ModelWithTemperature(model)
     print("temperature scaling model")
     temp_scaled_model.set_temperature(valid_loader)

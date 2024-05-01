@@ -6,9 +6,8 @@ from hydra import compose, initialize
 from omegaconf import DictConfig, OmegaConf
 from torch import nn
 
-from choose_openset_recognition_discriminator import choose_best_discriminator, \
-    load_model_for_inference
-from closedset_model import get_embedding_size
+from choose_openset_recognition_discriminator import choose_best_discriminator
+from closedset_model import get_embedding_size, load_model_for_inference
 from create_embeddings_openset_recognition import create_embeddings
 from openset_recognition_models import Discriminator
 from paths import CHECKPOINT_DIR
@@ -71,8 +70,8 @@ def create_composite_model(cfg: DictConfig) -> nn.Module:
     device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
     print(f"using device {device}")
 
-    model = load_model_for_inference(device, experiment_dir, model_id, n_classes)
-    opengan_model = load_opengan_discriminator(device, experiment_dir, hidden_dim, nc)
+    model = load_model_for_inference(device, experiment_dir, model_id, n_classes).eval()
+    opengan_model = load_opengan_discriminator(device, experiment_dir, hidden_dim, nc).eval()
     composite_model = CompositeOpenGANInferenceModel(model, opengan_model, openset_label)
     # torch.save(composite_model, "opengan_composite_model.pth")
     return composite_model

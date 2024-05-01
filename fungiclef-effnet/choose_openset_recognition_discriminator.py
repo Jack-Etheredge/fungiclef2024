@@ -16,7 +16,7 @@ from omegaconf import DictConfig, OmegaConf
 from paths import CHECKPOINT_DIR
 from tqdm import tqdm
 
-from closedset_model import build_model, get_embedding_size
+from closedset_model import get_embedding_size, load_model_for_inference
 from datasets import get_openset_datasets, get_datasets, get_closedset_test_dataset, collate_fn
 from openset_recognition_models import Discriminator
 from utils import get_model_features
@@ -206,21 +206,6 @@ def choose_best_discriminator(cfg: DictConfig, project_name=None) -> Path:
 
     print("saving best discriminator to the embedder model directory")
     torch.save(best_discriminator_model.state_dict(), experiment_dir / "openganfea_model.pth")
-
-
-def load_model_for_inference(device, experiment_dir, model_id, n_classes):
-    model = build_model(
-        pretrained=False,  # doesn't matter since the weights will be updated by the checkpoint
-        fine_tune=False,  # we don't need to unfreeze any weights
-        num_classes=n_classes,
-        dropout_rate=0.5,  # doesn't matter since embeddings will be created in eval on a fixed model
-        model_id=model_id,
-    ).to(device)
-    model_file_path = str(experiment_dir / f"model.pth")
-    checkpoint = torch.load(model_file_path)
-    model.load_state_dict(checkpoint['model_state_dict'])
-    model.eval()
-    return model
 
 
 # def create_feature_extractor_from_model(model, embedder_layer_offset):

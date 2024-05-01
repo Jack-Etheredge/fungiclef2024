@@ -66,4 +66,3 @@ evaluate:
   #  model_id: "tf_efficientnetv2_s.in21k"  # "MetaFG_meta_0"  # "tf_efficientnetv2_s.in21k"
   use_metadata: True
   image_size: 384
-  dropout_rate: 0.5

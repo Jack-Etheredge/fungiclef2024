@@ -11,7 +11,7 @@ from tqdm import tqdm
 
 from paths import CHECKPOINT_DIR, EMBEDDINGS_DIR
 from datasets import collate_fn, get_openset_datasets, get_datasets
-from closedset_model import build_model
+from closedset_model import build_model, load_model_for_inference
 from utils import get_model_features
 
 
@@ -53,19 +53,8 @@ def create_embeddings(cfg: DictConfig) -> None:
     print(f"using device {device}")
 
     print("constructing embedder (closed set classifier outputting from penultimate layer)")
-    model = build_model(
-        pretrained=False,  # we don't need to load the imagenet weights since we're going to load fine-tuned weights
-        fine_tune=False,  # we don't need to unfreeze any weights
-        num_classes=n_classes,
-        dropout_rate=0.5,  # doesn't matter since embeddings will be created in eval on a fixed model
-        model_id=model_id,
-    ).to(device)
     experiment_dir = CHECKPOINT_DIR / embedder_experiment_id
-    experiment_dir.mkdir(parents=True, exist_ok=True)
-    model_file_path = str(experiment_dir / f"model.pth")
-    checkpoint = torch.load(model_file_path)
-    model.load_state_dict(checkpoint['model_state_dict'])
-    model.eval()
+    model = load_model_for_inference(device, experiment_dir, model_id, n_classes)
     # feature_extractor = torch.nn.Sequential(*list(model.children())[:embedder_layer_offset])
 
     openset_dataset_train, _, _ = get_openset_datasets(pretrained=pretrained, image_size=image_size,

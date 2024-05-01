@@ -344,7 +344,7 @@ def train_model(cfg: DictConfig) -> None:
             best_validation_loss = valid_epoch_loss
             best_epoch = epoch
             print("updating best model")
-            checkpoint_model(epoch, model, optimizer, criterion, valid_epoch_loss, model_file_path)
+            checkpoint_model(epoch, model, dropout_rate, optimizer, criterion, valid_epoch_loss, model_file_path)
             print(">> successfully updated best model <<")
         elif epoch - best_epoch > early_stop_thresh:
             print(f"Early stopped training at epoch {epoch + 1}")
