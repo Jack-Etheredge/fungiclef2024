@@ -19,7 +19,7 @@ from tqdm import tqdm
 from closedset_model import build_model, get_embedding_size
 from datasets import get_openset_datasets, get_datasets, get_closedset_test_dataset, collate_fn
 from openset_recognition_models import Discriminator
-from utils import get_features_from_inputs
+from utils import get_model_features
 
 
 # os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
@@ -127,17 +127,15 @@ def choose_best_discriminator(cfg: DictConfig, project_name=None) -> Path:
     print("generate closed set embeddings and labels to select the model")
     for data in tqdm(closed_set_selection_loader):
         images, _ = data
-        images = images.to(device)
         # squeeze to use MLP instead of CNN
-        outputs = get_features_from_inputs(images, model, device).detach().cpu().numpy().squeeze()
+        outputs = get_model_features(images, model, device).detach().cpu().numpy().squeeze()
         embeddings.append(outputs)
         labels.extend([closedset_label] * outputs.shape[0])
     print("generate open set embeddings and labels to select the model")
     for data in tqdm(open_set_selection_loader):
         images, _ = data
-        images = images.to(device)
         # squeeze to use MLP instead of CNN
-        outputs = get_features_from_inputs(images, model, device).detach().cpu().numpy().squeeze()
+        outputs = get_model_features(images, model, device).detach().cpu().numpy().squeeze()
         embeddings.append(outputs)
         labels.extend([openset_label] * outputs.shape[0])
     embeddings = np.concatenate(embeddings)
@@ -177,17 +175,15 @@ def choose_best_discriminator(cfg: DictConfig, project_name=None) -> Path:
     print("generate closed set embeddings and labels to evaluate the model on test set")
     for data in tqdm(closed_set_evaluation_loader):
         images, _ = data
-        images = images.to(device)
         # squeeze to use MLP instead of CNN
-        outputs = get_features_from_inputs(images, model, device).detach().cpu().numpy().squeeze()
+        outputs = get_model_features(images, model, device).detach().cpu().numpy().squeeze()
         embeddings.append(outputs)
         labels.extend([closedset_label] * outputs.shape[0])
     print("generate open set embeddings and labels to evaluate the model on test set")
     for data in tqdm(open_set_evaluation_loader):
         images, _ = data
-        images = images.to(device)
         # squeeze to use MLP instead of CNN
-        outputs = get_features_from_inputs(images, model, device).detach().cpu().numpy().squeeze()
+        outputs = get_model_features(images, model, device).detach().cpu().numpy().squeeze()
         embeddings.append(outputs)
         labels.extend([openset_label] * outputs.shape[0])
     embeddings = np.concatenate(embeddings)

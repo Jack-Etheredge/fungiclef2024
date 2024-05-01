@@ -169,7 +169,7 @@ def copy_config(script_name, experiment_id):
     shutil.copyfile(config_from, config_to)
 
 
-def get_features_from_inputs(image, model, device):
+def get_model_features(image, model, device):
     """
     get features (intermediate representation before classification) from the model.
     handles both the case of metadata being present or not.
@@ -183,4 +183,19 @@ def get_features_from_inputs(image, model, device):
         image = image.to(device)
         outputs = model.forward_head(model.forward_features(image), pre_logits=True)
 
+    return outputs
+
+
+def get_model_preds(image, model, device):
+    """
+    get model preds. handles both the case of metadata being present or not.
+    """
+    if isinstance(image, list):
+        image, metadata = image
+        metadata = metadata.to(device)
+        image = image.to(device)
+        outputs = model(image, metadata)
+    else:
+        image = image.to(device)
+        outputs = model(image)
     return outputs

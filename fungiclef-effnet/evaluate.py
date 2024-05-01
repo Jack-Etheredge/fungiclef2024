@@ -380,8 +380,8 @@ if __name__ == "__main__":
     copy_config("evaluate", experiment_id)
 
     outputs_precomputed = False
-    # print(f"evaluating experiment {experiment_id}")
-    # evaluate_experiment(cfg=cfg, experiment_id=experiment_id, from_outputs=outputs_precomputed)
+    print(f"evaluating experiment {experiment_id}")
+    evaluate_experiment(cfg=cfg, experiment_id=experiment_id, from_outputs=outputs_precomputed)
     # print("creating temperature scaled model")
     # create_temperature_scaled_model(cfg)
     # print(f"evaluating experiment {experiment_id} with temperature scaling")

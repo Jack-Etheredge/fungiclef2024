@@ -10,6 +10,7 @@ train:
   early_stop_thresh: 10
   loss_function: "seesaw"
   use_poison_loss: True  # check me
+  use_logitnorm: True  # check me
   include_unknowns: False  # check me
   batch_size: 32  # 128 works for up to tf_efficientnetv2_s.in21k
   num_dataloader_workers: 12
@@ -59,7 +60,10 @@ open-set-recognition:
   openset_label: 0
   closedset_label: 1
 evaluate:
-  experiment_id: "2024-04-26 13:31:54.470604"  # "2024-04-28 23:56:00.910245" (metaformer)
-  model_id: "tf_efficientnetv2_s.in21k"  # "MetaFG_meta_0"  # "tf_efficientnetv2_s.in21k"
-  use_metadata: False
-  image_size: 380
+  experiment_id: "2024-04-28 23:56:00.910245"  # "2024-04-28 23:56:00.910245" (metaformer)  # "2024-04-26 13:31:54.470604" (efficientnetv2_s)
+  model_id: "MetaFG_meta_0"  # "MetaFG_meta_0"  # "tf_efficientnetv2_s.in21k"
+  #  experiment_id: "2024-04-26 13:31:54.470604"  # "2024-04-28 23:56:00.910245" (metaformer)  # "2024-04-26 13:31:54.470604" (efficientnetv2_s)
+  #  model_id: "tf_efficientnetv2_s.in21k"  # "MetaFG_meta_0"  # "tf_efficientnetv2_s.in21k"
+  use_metadata: True
+  image_size: 384
+  dropout_rate: 0.5

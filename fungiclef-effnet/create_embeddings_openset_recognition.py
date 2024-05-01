@@ -12,7 +12,7 @@ from tqdm import tqdm
 from paths import CHECKPOINT_DIR, EMBEDDINGS_DIR
 from datasets import collate_fn, get_openset_datasets, get_datasets
 from closedset_model import build_model
-from utils import get_features_from_inputs
+from utils import get_model_features
 
 
 def create_embeddings(cfg: DictConfig) -> None:
@@ -91,7 +91,7 @@ def create_embeddings(cfg: DictConfig) -> None:
     with torch.no_grad():
         for data in tqdm(openset_loader):
             images, _ = data
-            outputs = get_features_from_inputs(images, model, device).detach().cpu().numpy()
+            outputs = get_model_features(images, model, device).detach().cpu().numpy()
             embeddings.append(outputs)
     embeddings = np.concatenate(embeddings).squeeze()
     with h5py.File(openset_embedding_output_path, 'w') as hf:
@@ -103,8 +103,7 @@ def create_embeddings(cfg: DictConfig) -> None:
     with torch.no_grad():
         for data in tqdm(closedset_loader):
             images, _ = data
-            images = images.to(device)
-            outputs = get_features_from_inputs(images, model, device).detach().cpu().numpy()
+            outputs = get_model_features(images, model, device).detach().cpu().numpy()
             embeddings.append(outputs)
     embeddings = np.concatenate(embeddings).squeeze()
     with h5py.File(closedset_embedding_output_path, 'w') as hf:

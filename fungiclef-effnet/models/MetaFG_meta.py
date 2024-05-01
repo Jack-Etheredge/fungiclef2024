@@ -312,6 +312,10 @@ class MetaFG_Meta(nn.Module):
         if pre_logits:
             return x
         return self.head(x)
+    
+    # @property
+    # def device(self):
+    #     return next(self.parameters()).device
 
 
 def filter_kwargs(kwargs):

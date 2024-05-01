@@ -30,13 +30,21 @@ class CompositeOpenGANInferenceModel(nn.Module):
         self.opengan_discriminator = opengan_discriminator
         self.openset_label = openset_label
 
-    def forward(self, input):
-        intermediate_features = self.model.forward_features(input).squeeze()
+    def forward(self, image, metadata_row=None):
+        if metadata_row is not None:
+            # handle metaformer case
+            intermediate_features = self.model.forward_features(image, metadata_row).squeeze()
+        else:
+            intermediate_features = self.model.forward_features(image).squeeze()
+        # intermediate_features = self.model.forward_features(input).squeeze()
         final_features = self.model.forward_head(intermediate_features, pre_logits=True)
         if final_features.dim() == 1:
             final_features = final_features.unsqueeze(0)
 
         model_probas = self.model.forward_head(intermediate_features, pre_logits=False)
+        if model_probas.dim() == 1:
+            model_probas = model_probas.unsqueeze(0)
+
         model_preds = torch.argmax(model_probas, dim=1)
         if model_preds.dim() == 1:
             model_preds = model_preds.unsqueeze(0)
@@ -65,7 +73,7 @@ def create_composite_model(cfg: DictConfig) -> nn.Module:
 
     model = load_model_for_inference(device, experiment_dir, model_id, n_classes)
     opengan_model = load_opengan_discriminator(device, experiment_dir, hidden_dim, nc)
-    composite_model = CompositeOpenGANInferenceModel(model, opengan_model, embedder_layer_offset, openset_label)
+    composite_model = CompositeOpenGANInferenceModel(model, opengan_model, openset_label)
     # torch.save(composite_model, "opengan_composite_model.pth")
     return composite_model
 

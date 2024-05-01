@@ -23,7 +23,7 @@ from paths import CHECKPOINT_DIR
 from closedset_model import build_model, unfreeze_model
 from datasets import get_datasets, get_data_loaders, get_dataloader_combine_and_balance_datasets, get_openset_datasets
 from evaluate import evaluate_experiment
-from utils import copy_config, save_plots, checkpoint_model
+from utils import copy_config, save_plots, checkpoint_model, get_model_preds
 from losses import SeesawLoss, SupConLoss, CompositeLoss
 
 
@@ -66,20 +66,16 @@ def get_wd_params(model: nn.Module):
 
 
 # Training function.
-def train(model, trainloader, optimizer, criterion, loss_function_id, max_norm, device='cpu'):
+def train(model, trainloader, optimizer, criterion, max_norm, device='cpu'):
     model.train()
     print(f'Training with device {device}')
     train_running_loss = 0.0
     train_running_correct = 0
-    m = nn.Softmax(dim=-1)
     for i, data in tqdm(enumerate(trainloader), total=len(trainloader)):
-        image, labels = data
-        image = image.to(device)
-        labels = labels.to(device)
         optimizer.zero_grad()
-        # Forward pass.
-        outputs = model(image)
-        # Calculate the loss.
+        image, labels = data
+        labels = labels.to(device)
+        outputs = get_model_preds(image, model, device)
         loss = criterion(outputs, labels)
         train_running_loss += loss.item()
         # Calculate the accuracy.
@@ -100,19 +96,15 @@ def train(model, trainloader, optimizer, criterion, loss_function_id, max_norm, 
 
 # Validation function.
 @torch.no_grad()
-def validate(model, testloader, criterion, loss_function_id, device='cpu'):
+def validate(model, testloader, criterion, device='cpu'):
     model.eval()
     print(f'Validation with device {device}')
     valid_running_loss = 0.0
     valid_running_correct = 0
-    m = nn.Softmax(dim=-1)
     for i, data in tqdm(enumerate(testloader), total=len(testloader)):
         image, labels = data
-        image = image.to(device)
         labels = labels.to(device)
-        # Forward pass.
-        outputs = model(image)
-        # Calculate the loss.
+        outputs = get_model_preds(image, model, device)
         loss = criterion(outputs, labels)
         valid_running_loss += loss.item()
         # Calculate the accuracy.
@@ -147,6 +139,7 @@ def train_model(cfg: DictConfig) -> None:
     early_stop_thresh = cfg["train"]["early_stop_thresh"]
     multiclass_loss_function = cfg["train"]["loss_function"]
     use_poison_loss = cfg["train"]["use_poison_loss"]
+    use_logitnorm = cfg["train"]["use_logitnorm"]
     max_norm = cfg["train"]["max_norm"]
     undersample = cfg["train"]["undersample"]
     oversample = cfg["train"]["oversample"]
@@ -246,7 +239,8 @@ def train_model(cfg: DictConfig) -> None:
         multiclass_loss = nn.CrossEntropyLoss()
     else:
         raise ValueError(f"Unsupported loss function: {multiclass_loss_function}")
-    criterion = CompositeLoss(multiclass_loss=multiclass_loss, use_poison_loss=use_poison_loss)
+    criterion = CompositeLoss(multiclass_loss=multiclass_loss, use_poison_loss=use_poison_loss,
+                              use_logitnorm=use_logitnorm)
 
     if use_lr_finder:
         lr_finder = LRFinder(model, optimizer, criterion, device=device)
@@ -280,7 +274,7 @@ def train_model(cfg: DictConfig) -> None:
         while recreate_loader:
             try:
                 train_epoch_loss, train_epoch_acc = train(model, train_loader,
-                                                          optimizer, criterion, multiclass_loss_function, max_norm,
+                                                          optimizer, criterion, max_norm,
                                                           device)
                 recreate_loader = False
             except Exception as e:
@@ -293,7 +287,7 @@ def train_model(cfg: DictConfig) -> None:
         while recreate_loader:
             try:
                 valid_epoch_loss, valid_epoch_acc = validate(model, val_loader,
-                                                             criterion, multiclass_loss_function, device)
+                                                             criterion, device)
                 if scheduler:
                     scheduler.step(valid_epoch_loss)
                 recreate_loader = False

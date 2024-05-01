@@ -114,10 +114,18 @@ def get_embedding_size(model_id):
     Unfortunately some early experiments were run without timm and the state dict keys don't match.
     """
     model = build_model(model_id=model_id, pretrained=False)
-    try:
-        embedding_size = model.classifier.in_features
-    except:
-        embedding_size = model.head.in_features
+    if hasattr(model, "classifier"):
+        if hasattr(model.classifier, "in_features"):
+            embedding_size = model.classifier.in_features
+        else:
+            embedding_size = model.classifier[-1].in_features
+    elif hasattr(model, "head"):
+        if hasattr(model.head, "in_features"):
+            embedding_size = model.head.in_features
+        else:
+            embedding_size = model.head[-1].in_features
+    else:
+        raise ValueError("Model has neither head nor classifier attributes.")
     return embedding_size
 
 

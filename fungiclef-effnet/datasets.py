@@ -219,13 +219,7 @@ class CustomImageDataset(Dataset):
 
             if create_metadata:
                 for idx, row in df.iterrows():
-                    temporal_info = encode_temporal_info(row["month"], row["day"])
-                    # spatial_info = encode_spatial_info(row["Latitude"], row["Longitude"])
-                    countryCode_onehot_info = encode_onehot(row["countryCode"], countryCode)
-                    Substrate_onehot_info = encode_onehot(row["Substrate"], Substrate)
-                    Habitat_onehot_info = encode_onehot(row["Habitat"], Habitat)
-                    onehot_info = countryCode_onehot_info + Substrate_onehot_info + Habitat_onehot_info
-                    encoded_metadata = temporal_info + onehot_info
+                    encoded_metadata = encode_metadata_row(row)
                     self.metadata.append(encoded_metadata)
 
                 self.metadata = np.array(self.metadata).astype(np.float32)
@@ -274,6 +268,17 @@ class CustomImageDataset(Dataset):
         if self.include_metadata:
             return (image, metadata), label
         return image, label
+
+
+def encode_metadata_row(row):
+    temporal_info = encode_temporal_info(row["month"], row["day"])
+    # spatial_info = encode_spatial_info(row["Latitude"], row["Longitude"])
+    countryCode_onehot_info = encode_onehot(row["countryCode"], countryCode)
+    Substrate_onehot_info = encode_onehot(row["Substrate"], Substrate)
+    Habitat_onehot_info = encode_onehot(row["Habitat"], Habitat)
+    onehot_info = countryCode_onehot_info + Substrate_onehot_info + Habitat_onehot_info
+    encoded_metadata = temporal_info + onehot_info
+    return encoded_metadata
 
 
 def collate_fn(batch):
