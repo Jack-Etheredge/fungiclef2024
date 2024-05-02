@@ -91,7 +91,7 @@ def load_opengan_discriminator(device, experiment_dir, hidden_dim, nc):
 
 def train_and_select_discriminator(cfg: DictConfig, cache_embeddings=False) -> None:
     if cache_embeddings:
-        # create_embeddings(cfg)  # TODO: re-enable after fixing openGAN
+        create_embeddings(cfg)
         discriminators_dir_name = train_from_cache(cfg)
     else:
         discriminators_dir_name = train_openganfea(cfg)

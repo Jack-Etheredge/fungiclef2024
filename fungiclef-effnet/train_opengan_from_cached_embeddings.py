@@ -197,7 +197,7 @@ def train_openganfea(cfg: DictConfig) -> str:
     # all checkpoints saved to this directory
     # TODO: move this string construction to hydra
     project_name = embedder_experiment_id
-    project_name += f"dlr_{lr_d:.0e}_glr_{lr_g:.0e}_open{openset_label}closed{closedset_label}_wgangp_adam_ncritic2"
+    project_name += f"dlr_{lr_d:.0e}_glr_{lr_g:.0e}_open{openset_label}closed{closedset_label}_wgangp"
 
     warnings.filterwarnings("ignore")
     print(sys.version)

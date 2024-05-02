@@ -47,7 +47,7 @@ open-set-recognition:
   seed: 999
   batch_size: 128
   n_workers: 16
-  epochs: 60
+  epochs: 100
   openset_embeddings_name: "openset_embeddings_${evaluate.experiment_id}.h5"
   closedset_embeddings_name: "closedset_embeddings_${evaluate.experiment_id}.h5"
   pretrained: True
