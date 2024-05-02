@@ -231,9 +231,12 @@ def evaluate_experiment(cfg, experiment_id, temperature_scaling=False, opengan=F
                      scores_output_path)
 
     else:
-        for thresholding_method in ["_softmax", "_entropy"]:
+        for thresholding_method in ["_softmax", "_entropy", "_no_unknown_baseline"]:
 
-            ext += thresholding_method
+            if thresholding_method == "_no_unknown_baseline":
+                ext = thresholding_method
+            else:
+                ext += thresholding_method
             metrics_output_csv_path = str(experiment_dir / f"threshold_scores{ext}.csv")
             scores_output_path = str(experiment_dir / f"competition_metrics_scores{ext}.json")
             best_threshold_path = str(experiment_dir / f"best_threshold{ext}.txt")
@@ -252,6 +255,8 @@ def evaluate_experiment(cfg, experiment_id, temperature_scaling=False, opengan=F
                 # since high softmax proba == known, but high entropy == unknown
                 y_proba = -submission_df["entropy"].values
                 threshold_range = np.arange(y_proba.min(), y_proba.max(), 0.01)
+            elif thresholding_method == "_no_unknown_baseline":
+                threshold_range = None
             else:
                 raise ValueError(f"unrecognized thresholding method {thresholding_method}")
 
@@ -281,6 +286,8 @@ def create_homebrwed_scores_and_save_predictions_csv(best_threshold, predictions
 
 
 def get_best_threshold(metrics_output_csv_path, submission_df, threshold_range, y_proba, y_true):
+    if threshold_range is None:
+        return None
     scores = []
     thresholds = []
     y_pred = np.copy(submission_df["class_id"].values)
@@ -379,19 +386,17 @@ if __name__ == "__main__":
     copy_config("evaluate", experiment_id)
 
     outputs_precomputed = False
-    #
-    # print(f"evaluating experiment {experiment_id}")
-    # evaluate_experiment(cfg=cfg, experiment_id=experiment_id, from_outputs=outputs_precomputed)
-    #
-    # print("creating temperature scaled model")
-    # create_temperature_scaled_model(cfg)
-    # print(f"evaluating experiment {experiment_id} with temperature scaling")
-    # evaluate_experiment(cfg=cfg, experiment_id=experiment_id, temperature_scaling=True,
-    #                     from_outputs=outputs_precomputed)
-    #
+
+    print(f"evaluating experiment {experiment_id}")
+    evaluate_experiment(cfg=cfg, experiment_id=experiment_id, from_outputs=outputs_precomputed)
+
+    print("creating temperature scaled model")
+    create_temperature_scaled_model(cfg)
+    print(f"evaluating experiment {experiment_id} with temperature scaling")
+    evaluate_experiment(cfg=cfg, experiment_id=experiment_id, temperature_scaling=True,
+                        from_outputs=outputs_precomputed)
+
     print("training openGAN model")
     train_and_select_discriminator(cfg, cache_embeddings=True)
     print(f"evaluating experiment {experiment_id} with openGAN")
     evaluate_experiment(cfg=cfg, experiment_id=experiment_id, opengan=True, from_outputs=outputs_precomputed)
-
-    # evaluate_experiment(cfg=cfg, experiment_id=experiment_id, opengan=True, from_outputs=True)
