@@ -126,7 +126,7 @@ def normalize_transform(pretrained):
 
 
 def get_datasets(pretrained, image_size, validation_frac, oversample=False, undersample=False,
-                 oversample_prop=0.1, equal_undersampled_val=True, seed=42, include_metadata=False):
+                 oversample_prop=0.1, equal_undersampled_val=True, seed=42, include_metadata=False, training_augs=True):
     """
     Function to prepare the Datasets.
     :param pretrained: Boolean, True or False.
@@ -137,7 +137,8 @@ def get_datasets(pretrained, image_size, validation_frac, oversample=False, unde
     dataset = CustomImageDataset(
         label_file_path=METADATA_DIR / "FungiCLEF2023_train_metadata_PRODUCTION.csv",
         img_dir=DATA_DIR / "DF20",
-        transform=(get_train_transform(image_size, pretrained)),
+        transform=((get_train_transform(image_size, pretrained)) if training_augs else
+                   (get_valid_transform(image_size, pretrained))),  # this is the difference
         include_metadata=include_metadata,
     )
     val_dataset = CustomImageDataset(
@@ -343,7 +344,7 @@ def get_data_loaders(train_dataset, val_dataset, batch_size, num_workers, balanc
     return train_loader, valid_loader
 
 
-def get_openset_datasets(pretrained, image_size, n_train=2000, n_val=200, seed=42, training_augs=False,
+def get_openset_datasets(pretrained, image_size, n_train=2000, n_val=200, seed=42, training_augs=True,
                          include_metadata=False):
     """
     Function to prepare the Datasets.

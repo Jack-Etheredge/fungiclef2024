@@ -9,9 +9,11 @@ from torch import nn
 from choose_openset_recognition_discriminator import choose_best_discriminator
 from closedset_model import get_embedding_size, load_model_for_inference
 from create_embeddings_openset_recognition import create_embeddings
-from openset_recognition_models import Discriminator
+# from openset_recognition_models import Discriminator
+from openset_recognition_models import LayerNormDiscriminator as Discriminator
 from paths import CHECKPOINT_DIR
 from train_opengan import train_openganfea
+from train_opengan_from_cached_embeddings import train_openganfea as train_from_cache
 
 
 class CompositeOpenGANInferenceModel(nn.Module):
@@ -61,7 +63,6 @@ def create_composite_model(cfg: DictConfig) -> nn.Module:
     model_id = cfg["evaluate"]["model_id"]
     n_classes = cfg["train"]["n_classes"]
     openset_label = cfg["open-set-recognition"]["openset_label"]
-    embedder_layer_offset = cfg["open-set-recognition"]["embedder_layer_offset"]
 
     # get embedding size from the trained evaluation (embedder) model
     nc = get_embedding_size(model_id=model_id)
@@ -88,9 +89,12 @@ def load_opengan_discriminator(device, experiment_dir, hidden_dim, nc):
     return opengan_model
 
 
-def train_and_select_discriminator(cfg: DictConfig) -> None:
-    create_embeddings(cfg)
-    discriminators_dir_name = train_openganfea(cfg)
+def train_and_select_discriminator(cfg: DictConfig, cache_embeddings=False) -> None:
+    if cache_embeddings:
+        # create_embeddings(cfg)  # TODO: re-enable after fixing openGAN
+        discriminators_dir_name = train_from_cache(cfg)
+    else:
+        discriminators_dir_name = train_openganfea(cfg)
     choose_best_discriminator(cfg, project_name=discriminators_dir_name)
     # create_composite_model(cfg)
 

@@ -205,7 +205,7 @@ def evaluate_experiment(cfg, experiment_id, temperature_scaling=False, opengan=F
         )
 
     if opengan:
-        openset_label = cfg["open-set-recognition"]["openset_label"]
+        closedset_label = cfg["open-set-recognition"]["closedset_label"]
         metrics_output_csv_path = str(experiment_dir / "threshold_scores_opengan.csv")
         scores_output_path = str(experiment_dir / "competition_metrics_scores_opengan.json")
         best_threshold_path = str(experiment_dir / "best_threshold_opengan.txt")
@@ -215,7 +215,10 @@ def evaluate_experiment(cfg, experiment_id, temperature_scaling=False, opengan=F
         y_true = test_metadata["class_id"].values
         submission_df = pd.read_csv(predictions_output_csv_path)
         submission_df.drop_duplicates("observation_id", keep="first", inplace=True)
-        y_proba = submission_df["max_proba"].values if openset_label == 1 else -submission_df["max_proba"].values
+        # if closedset_label == 1, high proba == known
+        # if closedset_label == 0, then a high proba == unknown, so probas need to be inverted to work with:
+        # y_pred[y_proba < threshold] = -1
+        y_proba = submission_df["max_proba"].values if closedset_label == 1 else -submission_df["max_proba"].values
         threshold_range = np.arange(y_proba.min(), y_proba.max(), 0.01)
         best_threshold = get_best_threshold(metrics_output_csv_path, submission_df, threshold_range, y_proba,
                                             y_true)
@@ -248,7 +251,7 @@ def evaluate_experiment(cfg, experiment_id, temperature_scaling=False, opengan=F
                 # taking -entropy so that threshold logic will work for softmax or entropy
                 # since high softmax proba == known, but high entropy == unknown
                 y_proba = -submission_df["entropy"].values
-                threshold_range = np.arange(y_proba.min(), y_proba.max(), 0.05)
+                threshold_range = np.arange(y_proba.min(), y_proba.max(), 0.01)
             else:
                 raise ValueError(f"unrecognized thresholding method {thresholding_method}")
 
@@ -282,6 +285,7 @@ def get_best_threshold(metrics_output_csv_path, submission_df, threshold_range, 
     thresholds = []
     y_pred = np.copy(submission_df["class_id"].values)
     best_threshold, threshold = None, None
+    # we actually want the *unbalanced* (micro) f1, since final competition eval is unbalanced?
     score = f1_score(y_true, y_pred, average='macro')
     best_f1 = score
     thresholds.append(threshold)
@@ -290,22 +294,12 @@ def get_best_threshold(metrics_output_csv_path, submission_df, threshold_range, 
     for threshold in threshold_range:
         y_pred = np.copy(submission_df["class_id"].values)
         y_pred[y_proba < threshold] = -1
+        # we actually want the *unbalanced* (micro) f1, since final competition eval is unbalanced?
         score = f1_score(y_true, y_pred, average='macro')
         if score > best_f1:
             best_f1 = score
             best_threshold = threshold
         print(threshold, score)
-        thresholds.append(threshold)
-        scores.append(score)
-    for k in [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2]:
-        threshold = get_threshold(y_proba, k)
-        y_pred = np.copy(submission_df["class_id"].values)
-        y_pred[y_proba < threshold] = -1
-        score = f1_score(y_true, y_pred, average='macro')
-        if score > best_f1:
-            best_f1 = score
-            best_threshold = threshold
-        print(f"iqr_k{k}", threshold, score)
         thresholds.append(threshold)
         scores.append(score)
     threshold_scores = pd.DataFrame()
@@ -357,6 +351,9 @@ def calc_homebrewed_scores(y_true, y_pred, y_pred_w_unknown):
     f1_macro_known_vs_unknown = f1_score(y_true_known_vs_unknown, y_pred_known_vs_unknown, average='macro')
     homebrewed_scores['f1_macro_known_vs_unknown'] = f1_macro_known_vs_unknown
     print("F1 macro known vs unknown:", f1_macro_known_vs_unknown)
+    f1_micro_known_vs_unknown = f1_score(y_true_known_vs_unknown, y_pred_known_vs_unknown, average='micro')
+    homebrewed_scores['f1_micro_known_vs_unknown'] = f1_micro_known_vs_unknown
+    print("F1 micro known vs unknown:", f1_micro_known_vs_unknown)
     roc_auc_known_vs_unknown = roc_auc_score(y_true_known_vs_unknown, y_pred_known_vs_unknown)
     homebrewed_scores['roc_auc_known_vs_unknown'] = roc_auc_known_vs_unknown
     print("roc_auc_known_vs_unknown:", roc_auc_known_vs_unknown)
@@ -382,17 +379,19 @@ if __name__ == "__main__":
     copy_config("evaluate", experiment_id)
 
     outputs_precomputed = False
-
-    print(f"evaluating experiment {experiment_id}")
-    evaluate_experiment(cfg=cfg, experiment_id=experiment_id, from_outputs=outputs_precomputed)
-
-    print("creating temperature scaled model")
-    create_temperature_scaled_model(cfg)
-    print(f"evaluating experiment {experiment_id} with temperature scaling")
-    evaluate_experiment(cfg=cfg, experiment_id=experiment_id, temperature_scaling=True,
-                        from_outputs=outputs_precomputed)
-
+    #
+    # print(f"evaluating experiment {experiment_id}")
+    # evaluate_experiment(cfg=cfg, experiment_id=experiment_id, from_outputs=outputs_precomputed)
+    #
+    # print("creating temperature scaled model")
+    # create_temperature_scaled_model(cfg)
+    # print(f"evaluating experiment {experiment_id} with temperature scaling")
+    # evaluate_experiment(cfg=cfg, experiment_id=experiment_id, temperature_scaling=True,
+    #                     from_outputs=outputs_precomputed)
+    #
     print("training openGAN model")
-    train_and_select_discriminator(cfg)
+    train_and_select_discriminator(cfg, cache_embeddings=True)
     print(f"evaluating experiment {experiment_id} with openGAN")
     evaluate_experiment(cfg=cfg, experiment_id=experiment_id, opengan=True, from_outputs=outputs_precomputed)
+
+    # evaluate_experiment(cfg=cfg, experiment_id=experiment_id, opengan=True, from_outputs=True)

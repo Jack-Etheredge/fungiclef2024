@@ -13,7 +13,7 @@ import matplotlib
 from torch import nn as nn
 from torch.utils.data import Subset
 
-from openset_recognition_models import Generator, Discriminator
+from openset_recognition_models import Generator, Discriminator, LayerNormDiscriminator
 
 matplotlib.style.use('ggplot')
 OUTPUT_DIR = Path('__file__').parent.absolute() / "outputs"
@@ -152,6 +152,24 @@ def build_models(nz, ngf, nc, ndf, device, n_gpu):
     # build the networks and move them to GPU if applicable
     net_g = Generator(nz=nz, hidden_dim=ngf, nc=nc).to(device)
     net_d = Discriminator(nc=nc, hidden_dim=ndf).to(device)
+    # # Handle multi-gpu if desired
+    # if ('cuda' in device) and (n_gpu > 1):
+    #     net_d = nn.DataParallel(net_d, list(range(n_gpu)))
+    #     net_g = nn.DataParallel(net_g, list(range(n_gpu)))
+    # Apply the weights_init function to randomly initialize all weights to mean=0, stdev=0.2.
+    net_d.apply(weights_init)
+    net_g.apply(weights_init)
+    return net_g, net_d
+
+
+def build_wgangp_models(nz, ngf, nc, ndf, device, n_gpu):
+    """
+    create and initialize the networks
+    handle multi-GPU training if applicable
+    """
+    # build the networks and move them to GPU if applicable
+    net_g = Generator(nz=nz, hidden_dim=ngf, nc=nc).to(device)
+    net_d = LayerNormDiscriminator(nc=nc, hidden_dim=ndf).to(device)
     # # Handle multi-gpu if desired
     # if ('cuda' in device) and (n_gpu > 1):
     #     net_d = nn.DataParallel(net_d, list(range(n_gpu)))

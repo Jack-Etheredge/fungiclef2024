@@ -8,7 +8,7 @@ Choose best discriminator checkpoint for openGANfea
 from pathlib import Path
 
 import torch
-from sklearn.metrics import roc_auc_score
+from sklearn.metrics import roc_auc_score, f1_score
 from torch.utils.data import Dataset
 import numpy as np
 from hydra import compose, initialize
@@ -18,7 +18,8 @@ from tqdm import tqdm
 
 from closedset_model import get_embedding_size, load_model_for_inference
 from datasets import get_openset_datasets, get_datasets, get_closedset_test_dataset, collate_fn
-from openset_recognition_models import Discriminator
+# from openset_recognition_models import Discriminator
+from openset_recognition_models import LayerNormDiscriminator as Discriminator
 from utils import get_model_features
 
 
@@ -28,7 +29,6 @@ from utils import get_model_features
 def choose_best_discriminator(cfg: DictConfig, project_name=None) -> Path:
     hidden_dim = cfg["open-set-recognition"]["hidden_dim_d"]
     eval_fraction = 0.1
-    max_total_examples = 10_000  # TODO: reincorporate this
 
     # select embedder from evaluate experiment_id
     embedder_experiment_id = cfg["evaluate"]["experiment_id"]
@@ -50,7 +50,6 @@ def choose_best_discriminator(cfg: DictConfig, project_name=None) -> Path:
         '__file__').parent.absolute() / "openset_recognition_discriminators"  # experiment directory, used for reading the init model
     discriminator_dir = exp_dir / project_name
 
-    embedder_layer_offset = cfg["open-set-recognition"]["embedder_layer_offset"]
     batch_size = cfg["open-set-recognition"]["batch_size"]
     n_workers = cfg["open-set-recognition"]["n_workers"]
     openset_embeddings_name = cfg["open-set-recognition"]["openset_embeddings_name"]
@@ -148,7 +147,8 @@ def choose_best_discriminator(cfg: DictConfig, project_name=None) -> Path:
     # choose the best model based on ROC-AUC
     best_discriminator_model = None
     best_discriminator_path = None
-    best_rocauc = float("-inf")
+    # best_rocauc = float("-inf")
+    best_f1 = float("-inf")
     with torch.no_grad():
         print("selecting discriminator")
         for i, discriminator_path in enumerate(discriminators):
@@ -162,12 +162,20 @@ def choose_best_discriminator(cfg: DictConfig, project_name=None) -> Path:
 
             rocauc = roc_auc_score(labels, preds)
             print(f"roc-auc for discriminator {i + 1}: {rocauc}")
-            if rocauc > best_rocauc:
-                best_rocauc = rocauc
+            f1_macro = f1_score(labels, (preds > 0.5).astype(int), average='macro')
+            print(f"f1 macro for discriminator {i + 1}: {f1_macro}")
+            # if rocauc > best_rocauc:
+            #     best_rocauc = rocauc
+            #     best_discriminator_path = discriminator_path
+            #     best_discriminator_model = discriminator_model
+            #     print(f"new best discriminator: {best_discriminator_path} with selection roc-auc {best_rocauc}")
+            if f1_macro > best_f1:
+                best_f1 = f1_macro
                 best_discriminator_path = discriminator_path
                 best_discriminator_model = discriminator_model
-                print(f"new best discriminator: {best_discriminator_path} with selection roc-auc {best_rocauc}")
-    print(f"best discriminator: {best_discriminator_path} with selection roc-auc {best_rocauc}")
+                print(f"new best discriminator: {best_discriminator_path} with selection roc-auc {f1_macro}")
+    # print(f"best discriminator: {best_discriminator_path} with selection roc-auc {best_rocauc}")
+    print(f"best discriminator: {best_discriminator_path} with selection roc-auc {best_f1}")
 
     # generate embeddings and labels to evaluate the model
     embeddings = []
@@ -200,8 +208,10 @@ def choose_best_discriminator(cfg: DictConfig, project_name=None) -> Path:
 
     # evaluate roc-auc
     eval_rocauc = roc_auc_score(labels, preds)
+    eval_f1 = f1_score(labels, (preds > 0.5).astype(int), average='macro')
     print((f"best discriminator: {best_discriminator_path} "
-           f"with selection roc-auc {best_rocauc} "
+           f"with selection f1 macro {best_f1} "
+           f"and evaluation f1 macro {eval_f1} "
            f"and evaluation roc-auc {eval_rocauc}"))
 
     print("saving best discriminator to the embedder model directory")

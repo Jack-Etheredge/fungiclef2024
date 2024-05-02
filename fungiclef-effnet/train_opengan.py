@@ -23,7 +23,6 @@ import copy
 import sys
 from pathlib import Path
 
-import h5py
 import numpy as np
 
 import torch
@@ -39,36 +38,13 @@ from closedset_model import get_embedding_size
 from utils import set_seed, build_models, save_loss_plots
 from paths import EMBEDDINGS_DIR
 
+from torch.utils.data import Dataset, Subset
+from tqdm import tqdm
 
-class FeatDataset(Dataset):
-    """
-    a helper function to read cached off-the-shelf features per closed images
-    """
-
-    def __init__(self, data, label):
-        self.data = data
-        self.current_set_len = data.shape[0]
-        self.label = label
-        self.target = [label] * self.current_set_len
-
-    def __len__(self):
-        return self.current_set_len
-
-    def __getitem__(self, idx):
-        curdata = self.data[idx]
-        return curdata, self.label
-
-
-def get_cached_data(h5_path):
-    """
-    load cached set of features from an h5py .h5 file to numpy then torch
-    """
-    with h5py.File(h5_path, "r") as hf:
-        cached_data = hf["data"][:]
-    whole_feat_vec = torch.from_numpy(cached_data)
-    # whole_feat_vec.unsqueeze_(-1).unsqueeze_(-1)  # not needed since using MLP instead of CNN
-    print(whole_feat_vec.shape)
-    return whole_feat_vec
+from paths import CHECKPOINT_DIR, EMBEDDINGS_DIR
+from datasets import collate_fn, get_openset_datasets, get_datasets
+from closedset_model import build_model, load_model_for_inference
+from utils import get_model_features
 
 
 def save_model_state(generator, discriminator, epoch, save_dir, save_generator=False):
@@ -86,14 +62,16 @@ def save_model_state(generator, discriminator, epoch, save_dir, save_generator=F
         torch.save(cur_model_wts, path_to_save_model_state)
 
 
-def train(generator, discriminator, data, criterion, optimizerG, optimizerD, nz, device, real_label=1., fake_label=0.):
+def train(embedder, generator, discriminator, data, criterion, optimizerG, optimizerD, nz, device, real_label=1.,
+          fake_label=0.):
     ############################
     # (1) Update D network: maximize log(D(x)) + log(1 - D(G(z)))
     ###########################
     ## Train with all-real batch
     optimizerD.zero_grad()
     # Format batch
-    embeddings, labels = data
+    images, labels = data
+    embeddings = get_model_features(images, embedder, device).detach().cpu()
     real_cpu = embeddings.to(device)
     label = labels.float().to(device)
     b_size = real_cpu.size(0)
@@ -132,21 +110,51 @@ def train(generator, discriminator, data, criterion, optimizerG, optimizerD, nz,
 
 
 def train_openganfea(cfg: DictConfig) -> str:
+    # select embedder from evaluate experiment_id
     embedder_experiment_id = cfg["evaluate"]["experiment_id"]
-    openset_embeddings_name = cfg["open-set-recognition"]["openset_embeddings_name"]
-    closedset_embeddings_name = cfg["open-set-recognition"]["closedset_embeddings_name"]
-    openset_embedding_output_path = EMBEDDINGS_DIR / openset_embeddings_name
-    closedset_embedding_output_path = EMBEDDINGS_DIR / closedset_embeddings_name
+    model_id = cfg["evaluate"]["model_id"]
+    image_size = cfg["evaluate"]["image_size"]
+    use_metadata = cfg["evaluate"]["use_metadata"]
+
+    # embedder setup
+    # need batch size of the embedder model now instead of the lightweight GAN models
+    batch_size = int(cfg["evaluate"]["batch_size"] * 2.5)
+    n_workers = cfg["open-set-recognition"]["n_workers"]
+    openset_n_train = cfg["open-set-recognition"]["openset_n_train"]
+    openset_n_val = cfg["open-set-recognition"]["openset_n_val"]
+    closedset_n_train = cfg["open-set-recognition"]["closedset_n_train"]
+    pretrained = cfg["open-set-recognition"]["pretrained"]
+
+    # for closed set dataset
+    undersample = cfg["train"]["undersample"]
+    oversample = cfg["train"]["oversample"]
+    equal_undersampled_val = cfg["train"]["equal_undersampled_val"]
+    oversample_prop = cfg["train"]["oversample_prop"]
+    validation_frac = cfg["train"]["validation_frac"]
+
+    # for data loaders
+    worker_timeout_s = cfg["train"]["worker_timeout_s"]
+
+    # for constructing model
+    n_classes = cfg["train"]["n_classes"]
+
+    # openGAN settings
     lr_d = cfg["open-set-recognition"]["dlr"]  # learning rate discriminator
     lr_g = cfg["open-set-recognition"]["glr"]  # learning rate generator
     seed = cfg["open-set-recognition"]["seed"]
     num_epochs = cfg["open-set-recognition"]["epochs"]
-    batch_size = cfg["open-set-recognition"]["batch_size"]
     nz = cfg["open-set-recognition"]["noise_vector_size"]  # Size of z latent vector (i.e. size of generator input)
     hidden_dim_g = cfg["open-set-recognition"]["hidden_dim_g"]  # Size of feature maps in generator
     hidden_dim_d = cfg["open-set-recognition"]["hidden_dim_d"]  # Size of feature maps in discriminator
     openset_label = cfg["open-set-recognition"]["openset_label"]
     closedset_label = cfg["open-set-recognition"]["closedset_label"]
+
+    device = ('cuda' if torch.cuda.is_available() else 'cpu')
+    print(f"using device {device}")
+
+    print("constructing embedder (closed set classifier outputting from penultimate layer)")
+    experiment_dir = CHECKPOINT_DIR / embedder_experiment_id
+    model = load_model_for_inference(device, experiment_dir, model_id, n_classes)
 
     # get embedding size from the trained evaluation (embedder) model
     model_id = cfg["evaluate"]["model_id"]
@@ -190,17 +198,27 @@ def train_openganfea(cfg: DictConfig) -> str:
     print("fake embedding from generator shape:", fake.shape)
     print("label from discriminator shape:", predLabel.shape)
 
-    print("making closedset dataset")
-    closedset_embeddings = get_cached_data(closedset_embedding_output_path)
-    # if n_closed_examples < closedset_embeddings.shape[0]:
-    #     closedset_embeddings = closedset_embeddings[:n_closed_examples, ...]
-    closedset_dataset = FeatDataset(data=closedset_embeddings, label=closedset_label)
-
-    print("making openset dataset")
-    openset_embeddings = get_cached_data(openset_embedding_output_path)
-    # if n_open_examples < openset_embeddings.shape[0]:
-    #     openset_embeddings = openset_embeddings[:n_open_examples, ...]
-    openset_dataset = FeatDataset(data=openset_embeddings, label=openset_label)
+    training_augs = True
+    openset_dataset, _, _ = get_openset_datasets(pretrained=pretrained, image_size=image_size,
+                                                 n_train=openset_n_train, n_val=openset_n_val,
+                                                 include_metadata=use_metadata, training_augs=training_augs)
+    openset_dataset.target = [openset_label] * len(openset_dataset.target)
+    # openset_loader = torch.utils.data.DataLoader(openset_dataset, batch_size=batch_size,
+    #                                              shuffle=False, num_workers=n_workers, collate_fn=collate_fn,
+    #                                              timeout=worker_timeout_s)
+    closedset_dataset, _, _ = get_datasets(pretrained=pretrained, image_size=image_size,
+                                           validation_frac=validation_frac,
+                                           oversample=oversample, undersample=undersample,
+                                           oversample_prop=oversample_prop,
+                                           equal_undersampled_val=equal_undersampled_val,
+                                           include_metadata=use_metadata, training_augs=training_augs)
+    closedset_dataset.target = np.array([closedset_label] * len(closedset_dataset.target))
+    closedset_dataset = Subset(closedset_dataset,
+                               np.random.choice(closedset_dataset.target.shape[0], closedset_n_train, replace=False))
+    closedset_dataset.target = [closedset_label] * len(closedset_dataset)
+    # closedset_loader = torch.utils.data.DataLoader(closedset_dataset, batch_size=batch_size,
+    #                                                shuffle=False, num_workers=n_workers, collate_fn=collate_fn,
+    #                                                timeout=worker_timeout_s)
 
     print("combining dataloaders and balancing classes")
     dataset = ConcatDataset([openset_dataset, closedset_dataset])
@@ -214,9 +232,11 @@ def train_openganfea(cfg: DictConfig) -> str:
     weight_per_sample = weight_per_sample.double()
     sampler = torch.utils.data.sampler.WeightedRandomSampler(weight_per_sample, len(weight_per_sample))
     # TODO: this should be configured from hydra
-    dataloader = DataLoader(dataset, batch_size=batch_size, sampler=sampler,
-                            num_workers=16,
-                            timeout=120,
+    dataloader = DataLoader(dataset, batch_size=batch_size,
+                            sampler=sampler,
+                            num_workers=12,
+                            timeout=240,
+                            collate_fn=collate_fn,
                             # persistent_workers=True,
                             )
 
@@ -231,9 +251,13 @@ def train_openganfea(cfg: DictConfig) -> str:
     dis_losses = []
     iters = 0
     print("Starting Training Loop...")
-    for epoch in range(num_epochs):
+    for epoch in tqdm(range(num_epochs)):
         for i, data in enumerate(dataloader):
-            train_outs = train(generator, discriminator, data, criterion, optimizerG, optimizerD, nz, device)
+            images, labels = data
+            labels[labels > -1] = closedset_label
+            labels[labels == -1] = openset_label
+            data = images, labels
+            train_outs = train(model, generator, discriminator, data, criterion, optimizerG, optimizerD, nz, device)
             dis_loss, gen_loss, dis_x, dis_g_z1, dis_g_z2 = train_outs
 
             # Output training stats

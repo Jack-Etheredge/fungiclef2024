@@ -42,23 +42,25 @@ progressive-learning:
   progression_epochs: 100
 open-set-recognition:
   embedder_layer_offset: -1
-  dlr: 1e-6
-  glr: 1.5e-6
+  dlr: 1e-4
+  glr: 1e-4  # normally should be higher since we update discriminator multiple times relative to generator
   seed: 999
   batch_size: 128
   n_workers: 16
-  epochs: 100
+  epochs: 60
   openset_embeddings_name: "openset_embeddings_${evaluate.experiment_id}.h5"
   closedset_embeddings_name: "closedset_embeddings_${evaluate.experiment_id}.h5"
   pretrained: True
   openset_n_train: 2000
+  openset_oversample_rate: 1
   openset_n_val: 200
   closedset_n_train: 50000
+  closedset_oversample_rate: 1
   noise_vector_size: 100
   hidden_dim_g: 64
   hidden_dim_d: 64
-  openset_label: 0
-  closedset_label: 1
+  openset_label: 1
+  closedset_label: 0
 evaluate:
   experiment_id: "2024-04-28 23:56:00.910245"  # "2024-04-28 23:56:00.910245" (metaformer)  # "2024-04-26 13:31:54.470604" (efficientnetv2_s)
   model_id: "MetaFG_meta_0"  # "MetaFG_meta_0"  # "tf_efficientnetv2_s.in21k"
@@ -66,3 +68,4 @@ evaluate:
   #  model_id: "tf_efficientnetv2_s.in21k"  # "MetaFG_meta_0"  # "tf_efficientnetv2_s.in21k"
   use_metadata: True
   image_size: 384
+  batch_size: 32
