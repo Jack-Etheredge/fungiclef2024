@@ -36,6 +36,7 @@ train_aug:
   trivial_aug: True
   auto_aug: False
   random_aug: False
+  gridmask_prob: 0.2
 progressive-learning:
   start_image_size: 384
   end_image_size: 384

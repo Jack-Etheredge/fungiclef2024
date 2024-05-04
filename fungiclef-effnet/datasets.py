@@ -24,6 +24,7 @@ from torch.utils.data import DataLoader, Dataset, Subset, ConcatDataset
 from torchvision.transforms.v2 import InterpolationMode
 
 from paths import DATA_DIR, METADATA_DIR
+from augmentations import Grid
 
 countryCode = [
     'FO', 'DE', 'GA', 'CR', 'SJ', 'AT', 'IE', 'JP', 'FR', 'AU', 'PL', 'GR', 'US',
@@ -94,6 +95,9 @@ def get_train_transform(cfg, image_size, pretrained):
         v2.Compose([v2.ToImage(), v2.ToDtype(torch.float32, scale=True)]),
         normalize_transform(pretrained)
     ])
+
+    if cfg["train_aug"]["gridmask_prob"] is not None and cfg["train_aug"]["gridmask_prob"] > 0.0:
+        train_augs.append(Grid(True, True, 360, 0, 0, cfg["train_aug"]["gridmask_prob"]))
 
     train_transform = v2.Compose(train_augs)
     return train_transform
