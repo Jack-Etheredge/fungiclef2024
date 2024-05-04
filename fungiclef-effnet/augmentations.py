@@ -7,9 +7,7 @@ from PIL import Image
 
 
 class Grid(object):
-    def __init__(self, d1, d2, rotate=1, ratio=0.5, mode=0, prob=1.):
-        self.d1 = d1
-        self.d2 = d2
+    def __init__(self, rotate=1, ratio=0.5, mode=0, prob=1.):
         self.rotate = rotate
         self.ratio = ratio
         self.mode = mode
@@ -18,14 +16,12 @@ class Grid(object):
     def __call__(self, img):
         if np.random.rand() > self.prob:
             return img
+
         h = img.shape[1]
         w = img.shape[2]
 
         hh = int(1.5 * h)
-
-        self.d1 = 2
-        self.d2 = min(h, w)
-        d = np.random.randint(self.d1, self.d2)
+        d = np.random.randint(2, min(h, w))
 
         box_len = np.random.randint(1, d)
 

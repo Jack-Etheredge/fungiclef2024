@@ -97,7 +97,7 @@ def get_train_transform(cfg, image_size, pretrained):
     ])
 
     if cfg["train_aug"]["gridmask_prob"] is not None and cfg["train_aug"]["gridmask_prob"] > 0.0:
-        train_augs.append(Grid(True, True, 360, 0, 0, cfg["train_aug"]["gridmask_prob"]))
+        train_augs.append(Grid(360, 0, 0, cfg["train_aug"]["gridmask_prob"]))
 
     train_transform = v2.Compose(train_augs)
     return train_transform
