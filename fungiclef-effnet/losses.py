@@ -187,7 +187,8 @@ class UnknownLoss(torch.nn.Module):
 
 class CompositeLoss(torch.nn.Module):
 
-    def __init__(self, multiclass_loss, use_poison_loss=True, poisonous_class_ids=POISONOUS_CLASS_IDS):
+    def __init__(self, multiclass_loss, use_poison_loss=True, use_logitnorm=False,
+                 poisonous_class_ids=POISONOUS_CLASS_IDS, logitnorm_t=0.01):
         super().__init__()
         self.multiclass_loss = multiclass_loss
         self.unknown_loss = UnknownLoss()
@@ -195,11 +196,16 @@ class CompositeLoss(torch.nn.Module):
         # therefore we want to give a 100x weight to misclassifications of poisonous
         self.softmax = nn.Softmax(dim=-1)
         self.use_poison_loss = use_poison_loss
+        self.use_logitnorm = use_logitnorm
         self.poisonous_class_ids = poisonous_class_ids
+        self.logitnorm_t = logitnorm_t  # default set according to CIFAR-100 from https://arxiv.org/pdf/2205.09310
 
     def forward(self, outputs, labels):
         open_outputs, closed_outputs, _, closed_labels, n_open, n_closed = self.split_open_closed(outputs, labels)
         if n_closed > 0:
+            if self.use_logitnorm:
+                norms = torch.norm(closed_outputs, p=2, dim=-1, keepdim=True) + 1e-7
+                closed_outputs = torch.div(closed_outputs, norms) / self.logitnorm_t
             if isinstance(self.multiclass_loss, FocalLoss):
                 loss = self.multiclass_loss(self.softmax(closed_outputs), closed_labels)
             else:

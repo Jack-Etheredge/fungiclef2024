@@ -5,8 +5,12 @@ switch to v2 of transforms
 https://pytorch.org/vision/stable/transforms.html#v1-or-v2-which-one-should-i-use
 """
 
+import math
 import os
+import re
 from collections import Counter
+from math import radians, cos, sin, pi
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -20,6 +24,43 @@ from torch.utils.data import DataLoader, Dataset, Subset, ConcatDataset
 from torchvision.transforms.v2 import InterpolationMode
 
 from paths import DATA_DIR, METADATA_DIR
+
+countryCode = [
+    'FO', 'DE', 'GA', 'CR', 'SJ', 'AT', 'IE', 'JP', 'FR', 'AU', 'PL', 'GR', 'US',
+    'RU', 'PT', 'RE', 'AL', 'CA', 'IT', 'NP', 'HR', 'GL', 'GB', 'FI', 'NO', 'CH',
+    'SE', 'HU', 'NL', 'ES', 'IS', 'BE', 'CZ', 'DK',
+    # new ones:
+    # 'LV', 'LI', 'BA', 'RO', 'MT', 'EE', 'ID',
+]
+
+Substrate = [
+    'fruits', 'remains of vertebrates (e.g. feathers and fur)', 'other substrate',
+    'dead wood (including bark)', 'wood', 'stems of herbs, grass etc', 'dead stems of herbs, grass etc',
+    'stone', 'wood and roots of living trees', 'mycetozoans', 'bark', 'calcareous stone',
+    'building stone (e.g. bricks)', 'faeces', 'wood chips or mulch', 'living leaves', 'fungi',
+    'living stems of herbs, grass etc', 'leaf or needle litter',
+    'siliceous stone', 'mosses', 'bark of living trees', 'insects', 'spiders', 'living flowers', 'catkins', 'lichens',
+    'soil', 'liverworts', 'peat mosses', 'cones', 'fire spot',
+    # new ones:
+    # 'šišky', 'mechorosty', 'půda', 'kůra živých stromů', 'houby', 'odumřelé dřevo (včetně kůry)',
+    # 'dřevní štěpka nebo mulč', 'listí nebo jehličí', 'dřevo a kořeny živých stromů',
+]  # contains nan
+
+Habitat = [
+    'bog', 'Unmanaged deciduous woodland', 'Unmanaged coniferous woodland', 'Acidic oak woodland',
+    'ditch', 'wooded meadow, grazing forest', 'natural grassland', 'heath', 'dune', 'park/churchyard',
+    'fertilized field in rotation', 'gravel or clay pit', 'Deciduous woodland', 'Bog woodland',
+    'coniferous woodland/plantation', 'Forest bog', 'Mixed woodland (with coniferous and deciduous trees)',
+    'lawn', 'salt meadow', 'Willow scrubland', 'improved grassland', 'rock', 'garden', 'Thorny scrubland',
+    'other habitat', 'fallow field', 'masonry', 'roadside', 'hedgerow', 'meadow', 'roof',
+    # new ones:
+    # 'zahrada', 'louka/trávník', 'listnatý les', 'park/hřbitov', 'louka', 'jehličnatý les s přirozeným charakterem',
+    # 'lesní rašeliniště', 'krajnice', 'trávník', 'acidofilní / kyselá doubrava', 'listnatý les s přirozeným charakterem',
+    # 'smíšený les', 'pole', 'příkop', 'jehličnatý les / monokultura', 'živý plot',
+
+]  # contains nan
+
+IMG_EXTENSIONS = ['.png', '.jpg', '.jpeg']
 
 # dataset loading issue
 # https://github.com/eriklindernoren/PyTorch-YOLOv3/issues/162
@@ -85,7 +126,7 @@ def normalize_transform(pretrained):
 
 
 def get_datasets(pretrained, image_size, validation_frac, oversample=False, undersample=False,
-                 oversample_prop=0.1, equal_undersampled_val=True, seed=42):
+                 oversample_prop=0.1, equal_undersampled_val=True, seed=42, include_metadata=False, training_augs=True):
     """
     Function to prepare the Datasets.
     :param pretrained: Boolean, True or False.
@@ -96,12 +137,15 @@ def get_datasets(pretrained, image_size, validation_frac, oversample=False, unde
     dataset = CustomImageDataset(
         label_file_path=METADATA_DIR / "FungiCLEF2023_train_metadata_PRODUCTION.csv",
         img_dir=DATA_DIR / "DF20",
-        transform=(get_train_transform(image_size, pretrained))
+        transform=((get_train_transform(image_size, pretrained)) if training_augs else
+                   (get_valid_transform(image_size, pretrained))),  # this is the difference
+        include_metadata=include_metadata,
     )
     val_dataset = CustomImageDataset(
         label_file_path=METADATA_DIR / "FungiCLEF2023_train_metadata_PRODUCTION.csv",
         img_dir=DATA_DIR / "DF20",
-        transform=(get_valid_transform(image_size, pretrained))  # only difference
+        transform=(get_valid_transform(image_size, pretrained)),  # only difference
+        include_metadata=include_metadata,
     )
     targets = dataset.target
 
@@ -143,44 +187,99 @@ class CustomImageDataset(Dataset):
                  keep_only: set | None = None,
                  exclude: set | None = None,
                  transform=None,
-                 target_transform=None):
-        self.img_labels = pd.read_csv(label_file_path, dtype={"class_id": "int64"})
-        self.img_labels = self.img_labels[["image_path", "class_id"]]
+                 target_transform=None,
+                 include_metadata=False,
+                 metadata_from_cache=True):
+
+        self.classes = None
+        self.target = None
+        self.image_filenames = None
+        self.labels = None
+        self.metadata = []
+        self.include_metadata = include_metadata
+        self.metadata_from_cache = metadata_from_cache
         self.img_dir = img_dir
-        self.keep_only = keep_only
-        if self.keep_only is not None:
-            self.img_labels = self.img_labels[self.img_labels["class_id"].isin(self.keep_only)]
-        self.exclude = exclude
-        if self.exclude is not None:
-            self.img_labels = self.img_labels[~self.img_labels["class_id"].isin(self.exclude)]
+        self._setup_from_df(exclude, keep_only, label_file_path)
         self.transform = transform
         self.target_transform = target_transform
-        self.classes = self.img_labels["class_id"].unique()
-        self.target = self.img_labels["class_id"].values
+
+    def _setup_from_df(self, exclude, keep_only, label_file_path):
+        df = pd.read_csv(label_file_path, dtype={"class_id": "int64"})
+
+        if self.include_metadata:
+            create_metadata = True
+            write_cache = False
+            if self.metadata_from_cache:
+                cache_location = Path(self.img_dir).parent / f"{Path(self.img_dir).name}.npy"
+                if cache_location.exists():
+                    with open(cache_location, 'rb') as f:
+                        self.metadata = np.load(f)
+                    create_metadata = False
+                else:
+                    write_cache = True
+
+            if create_metadata:
+                for idx, row in df.iterrows():
+                    encoded_metadata = encode_metadata_row(row)
+                    self.metadata.append(encoded_metadata)
+
+                self.metadata = np.array(self.metadata).astype(np.float32)
+
+            if write_cache:
+                with open(cache_location, 'wb') as f:
+                    np.save(f, self.metadata)
+
+        df = df[["image_path", "class_id"]]
+
+        if keep_only is not None:
+            df = df[df["class_id"].isin(keep_only)]
+        if exclude is not None:
+            df = df[~df["class_id"].isin(exclude)]
+        self.classes = df["class_id"].unique()
+        self.target = df["class_id"].values
+        self.image_filenames = df["image_path"].values
+        self.labels = df["class_id"].values
 
     def __len__(self):
-        return len(self.img_labels)
+        return len(self.labels)
 
     def __getitem__(self, idx):
         """If an image can't be read, print the error and return None"""
         try:
-            img_path = os.path.join(self.img_dir, self.img_labels.iloc[idx, 0])
+            img_path = os.path.join(self.img_dir, self.image_filenames[idx])
             # from torchvision.io import read_image
             # image = read_image(img_path)
             # https://pytorch.org/vision/main/_modules/torchvision/datasets/folder.html#ImageFolder
             with open(img_path, "rb") as f:
                 image = Image.open(f).convert('RGB')  # hopefully this handles greyscale cases
             # image = transforms.ToPILImage()(cv2.cvtColor(cv2.imread(img_path), cv2.COLOR_BGR2RGB))
-            label = self.img_labels.iloc[idx, 1]
+            label = self.labels[idx]
             if self.transform:
                 image = self.transform(image)
             if self.target_transform:
                 label = self.target_transform(label)
+            if self.include_metadata:
+                metadata = self.metadata[idx]
+                metadata = torch.tensor(metadata, dtype=torch.float32)
         except Exception as e:
             print("issue loading image")
             print(e)
             return None
+
+        if self.include_metadata:
+            return (image, metadata), label
         return image, label
+
+
+def encode_metadata_row(row):
+    temporal_info = encode_temporal_info(row["month"], row["day"])
+    # spatial_info = encode_spatial_info(row["Latitude"], row["Longitude"])
+    countryCode_onehot_info = encode_onehot(row["countryCode"], countryCode)
+    Substrate_onehot_info = encode_onehot(row["Substrate"], Substrate)
+    Habitat_onehot_info = encode_onehot(row["Habitat"], Habitat)
+    onehot_info = countryCode_onehot_info + Substrate_onehot_info + Habitat_onehot_info
+    encoded_metadata = temporal_info + onehot_info
+    return encoded_metadata
 
 
 def collate_fn(batch):
@@ -245,7 +344,8 @@ def get_data_loaders(train_dataset, val_dataset, batch_size, num_workers, balanc
     return train_loader, valid_loader
 
 
-def get_openset_datasets(pretrained, image_size, n_train=2000, n_val=200, seed=42, training_augs=False):
+def get_openset_datasets(pretrained, image_size, n_train=2000, n_val=200, seed=42, training_augs=True,
+                         include_metadata=False):
     """
     Function to prepare the Datasets.
     :param pretrained: Boolean, True or False.
@@ -260,13 +360,15 @@ def get_openset_datasets(pretrained, image_size, n_train=2000, n_val=200, seed=4
         img_dir=DATA_DIR / "DF21",
         keep_only={-1},
         transform=((get_train_transform(image_size, pretrained)) if training_augs else
-                   (get_valid_transform(image_size, pretrained)))  # this is the difference
+                   (get_valid_transform(image_size, pretrained))),  # this is the difference
+        include_metadata=include_metadata
     )
     val_test_dataset = CustomImageDataset(
         label_file_path=METADATA_DIR / "FungiCLEF2023_val_metadata_PRODUCTION.csv",
         img_dir=DATA_DIR / "DF21",
         keep_only={-1},
-        transform=(get_valid_transform(image_size, pretrained))  # this is the difference
+        transform=(get_valid_transform(image_size, pretrained)),  # this is the difference
+        include_metadata=include_metadata
     )
 
     indices = list(range(train_dataset.target.shape[0]))
@@ -283,7 +385,7 @@ def get_openset_datasets(pretrained, image_size, n_train=2000, n_val=200, seed=4
     return train_dataset, val_dataset, test_dataset
 
 
-def get_closedset_test_dataset(pretrained, image_size):
+def get_closedset_test_dataset(pretrained, image_size, include_metadata=False):
     """
     Function to prepare the Datasets.
     :param pretrained: Boolean, True or False.
@@ -295,7 +397,8 @@ def get_closedset_test_dataset(pretrained, image_size):
         label_file_path=METADATA_DIR / "FungiCLEF2023_val_metadata_PRODUCTION.csv",
         img_dir=DATA_DIR / "DF21",
         exclude={-1},
-        transform=(get_valid_transform(image_size, pretrained))
+        transform=(get_valid_transform(image_size, pretrained)),
+        include_metadata=include_metadata
     )
 
     return val_test_dataset
@@ -324,6 +427,7 @@ def get_dataloader_combine_and_balance_datasets(dataset_1, dataset_2, batch_size
                             persistent_workers=persistent_workers,
                             )
     return dataloader
+
 
 # the imagefolder dataset will sort by class then filename, so for data splitting purposes, we can sort the
 # image_path per class and get back the order in the dataset
@@ -363,3 +467,110 @@ def get_dataloader_combine_and_balance_datasets(dataset_1, dataset_2, batch_size
 #     test_dataset.target = np.array([-1] * len(test_dataset))
 #
 #     return train_dataset, val_dataset, test_dataset
+
+
+def get_spatial_info(latitude, longitude):
+    if latitude and longitude:
+        latitude = radians(latitude)
+        longitude = radians(longitude)
+        x = cos(latitude) * cos(longitude)
+        y = cos(latitude) * sin(longitude)
+        z = sin(latitude)
+        return [x, y, z]
+    else:
+        return [0, 0, 0]
+
+
+def get_temporal_info(date, miss_hour=False):
+    try:
+        if date:
+            if miss_hour:
+                pattern = re.compile(r'(\d*)-(\d*)-(\d*)', re.I)
+            else:
+                pattern = re.compile(r'(\d*)-(\d*)-(\d*) (\d*):(\d*):(\d*)', re.I)
+            m = pattern.match(date.strip())
+
+            if m:
+                year = int(m.group(1))
+                month = int(m.group(2))
+                day = int(m.group(3))
+                x_month = sin(2 * pi * month / 12)
+                y_month = cos(2 * pi * month / 12)
+                if miss_hour:
+                    x_hour = 0
+                    y_hour = 0
+                else:
+                    hour = int(m.group(4))
+                    x_hour = sin(2 * pi * hour / 24)
+                    y_hour = cos(2 * pi * hour / 24)
+                return [x_month, y_month, x_hour, y_hour]
+            else:
+                return [0, 0, 0, 0]
+        else:
+            return [0, 0, 0, 0]
+    except:
+        return [0, 0, 0, 0]
+
+
+def encode_temporal_info(month, day):
+    if math.isnan(month):
+        x_month = -2
+        y_month = -2
+    else:
+        month = int(month)
+        x_month = sin(2 * pi * month / 12)
+        y_month = cos(2 * pi * month / 12)
+    if math.isnan(day):
+        x_day = -2
+        y_day = -2
+    else:
+        day = int(day)
+        x_day = sin(2 * pi * day / 31)
+        y_day = cos(2 * pi * day / 31)
+    temporal_info = [x_month, y_month, x_day, y_day]
+    return temporal_info
+
+
+def encode_spatial_info(latitude, longitude):
+    if latitude and longitude:
+        latitude = radians(latitude)
+        longitude = radians(longitude)
+        x = cos(latitude) * cos(longitude)
+        y = cos(latitude) * sin(longitude)
+        z = sin(latitude)
+        return [x, y, z]
+    else:
+        return [0, 0, 0]
+
+
+def encode_onehot(attr, attr_list, additional_unknown_idx=False):
+    if additional_unknown_idx:
+        code = [0] * (len(attr_list) + 1)  # add unknown idx
+        if isinstance(attr, str):
+            try:
+                idx = attr_list.index(attr)
+            except ValueError:
+                idx = len(attr_list)  # add to final position, unknown idx
+            code[idx] = 1
+
+    else:
+        code = [0] * len(attr_list)
+        if isinstance(attr, str):
+            try:
+                idx = attr_list.index(attr)
+                code[idx] = 1
+            except ValueError:
+                pass
+
+    return code
+
+
+def fungi_collate_fn(batch):
+    batch = list(filter(lambda x: x is not None, batch))
+    imgs, targets, genus_targets, auxs, img_names = zip(*batch)
+    imgs = torch.stack(imgs, 0)
+    targets = torch.tensor(targets, dtype=torch.int64)
+    genus_targets = torch.tensor(genus_targets, dtype=torch.int64)
+    auxs = [torch.tensor(aux, dtype=torch.float64) for aux in auxs]
+    auxs = torch.stack(auxs, dim=0)
+    return imgs, targets, genus_targets, auxs, img_names

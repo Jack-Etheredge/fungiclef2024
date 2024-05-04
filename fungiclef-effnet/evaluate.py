@@ -8,7 +8,6 @@ from hydra import compose, initialize
 from omegaconf import OmegaConf
 from sklearn.metrics import accuracy_score, balanced_accuracy_score, f1_score, roc_auc_score
 from tqdm import tqdm
-from torchvision.transforms import v2
 from PIL import Image
 import torch
 from pathlib import Path
@@ -19,10 +18,11 @@ from scipy.stats import entropy
 from closedset_model import build_model
 from competition_metrics import evaluate
 from create_opengan_discriminator import train_and_select_discriminator, create_composite_model
-from datasets import get_valid_transform
+from datasets import get_valid_transform, encode_metadata_row
 from paths import METADATA_DIR, VAL_DATA_DIR
 from temperature_scaling import ModelWithTemperature
 from temp_scale_model import create_temperature_scaled_model
+from utils import copy_config
 
 np.set_printoptions(precision=5)
 ImageFile.LOAD_TRUNCATED_IMAGES = True
@@ -42,33 +42,17 @@ def get_threshold(max_prob_list, k):
     return min_th
 
 
-def get_penultimate_layer_output(model, image):
-    penultimate_layer_output = None
-
-    def get_input():
-        def hook(model, input, output):
-            penultimate_layer_output = input[0].detach()
-
-        return hook
-
-    model.classifier.register_forward_hook(get_input())
-    outputs = model(image)
-
-    return outputs, penultimate_layer_output
-
-
 class PytorchWorker:
     """Run inference using PyTorch."""
 
     def __init__(self, model_path: str, number_of_categories: int = 1604, temp_scaling=False,
-                 model_id="efficientnet_b0", use_timm=True, device="cpu"):
+                 model_id="efficientnet_b0", device="cpu"):
 
         ########################################
         # must be set before calling _load_model
         self.number_of_categories = number_of_categories
         self.temp_scaling = temp_scaling
         self.model_id = model_id
-        self.use_timm = use_timm
         self.device = device
         ########################################
 
@@ -84,10 +68,9 @@ class PytorchWorker:
             model_id=self.model_id,
             pretrained=False,
             fine_tune=False,
-            num_classes=self.number_of_categories,
             # this is all that matters. everything else will be overwritten by checkpoint state
-            dropout_rate=0.5,
-            use_timm=self.use_timm,
+            num_classes=self.number_of_categories,
+            dropout_rate=0.0,  # doesn't matter for eval since pytorch will use identity at inference
         ).to(self.device)
         model_ckpt = torch.load(model_path, map_location=self.device)
         if self.temp_scaling:
@@ -98,14 +81,21 @@ class PytorchWorker:
 
         return model.to(self.device).eval()
 
-    def predict_image(self, image: np.ndarray) -> list():
+    def predict_image(self, image: np.ndarray, metadata_row=None) -> list():
         """Run inference using ONNX runtime.
 
         :param image: Input image as numpy array.
+        :param metadata_row: Input metadata encoded for model.
         :return: A list with logits and confidences.
         """
 
-        logits = self.model(self.transforms(image).unsqueeze(0).to(self.device))
+        transformed_images = self.transforms(image).unsqueeze(0).to(self.device)
+
+        if metadata_row is not None:
+            transformed_metadata = metadata_row.unsqueeze(0).to(self.device)
+            logits = self.model(transformed_images, transformed_metadata)
+        else:
+            logits = self.model(transformed_images)
 
         return logits.tolist()
 
@@ -120,14 +110,12 @@ def make_submission(test_metadata, model_path, output_csv_path, images_root_path
     print(f"Using devide: {device}")
 
     model_id = cfg["evaluate"]["model_id"]
-    use_timm = cfg["evaluate"]["use_timm"]
 
     # Consolidate the model building logic
     if opengan:
         model = create_composite_model(cfg).to(device)
     else:
-        model = PytorchWorker(model_path, temp_scaling=temp_scaling, model_id=model_id, use_timm=use_timm,
-                              device=device)
+        model = PytorchWorker(model_path, temp_scaling=temp_scaling, model_id=model_id, device=device)
 
     # this allows use on both validation and test
     test_metadata.rename(columns={"observationID": "observation_id"}, inplace=True)
@@ -136,19 +124,30 @@ def make_submission(test_metadata, model_path, output_csv_path, images_root_path
     predictions = []
     max_probas = []
     entropy_scores = []
-    image_paths = test_metadata["image_path"]
+
     with torch.no_grad():
-        for image_path in tqdm(image_paths):
+        for i, row in tqdm(test_metadata.iterrows(), total=len(test_metadata)):
+            image_path = row["image_path"]
             try:
                 image_path = os.path.join(images_root_path, image_path)
                 test_image = Image.open(image_path).convert("RGB")
                 if opengan:
-                    pred, proba = model(TRANSFORMS(test_image).unsqueeze(0).to(device))
+                    if cfg["evaluate"]["use_metadata"]:
+                        encoded_metadata_row = torch.tensor(np.array(encode_metadata_row(row)),
+                                                            dtype=torch.float32).unsqueeze(0).to(device)
+                        transformed_image = TRANSFORMS(test_image).unsqueeze(0).to(device)
+                        pred, proba = model(transformed_image, encoded_metadata_row)
+                    else:
+                        pred, proba = model(TRANSFORMS(test_image).unsqueeze(0).to(device))
                     # TODO: .item() solution is brittle and won't work once multiple images are fed in a batch
                     predictions.append(pred.item())
                     max_probas.append(proba.item())
                 else:
-                    logits = model.predict_image(test_image)
+                    if cfg["evaluate"]["use_metadata"]:
+                        encoded_metadata_row = torch.tensor(np.array(encode_metadata_row(row)), dtype=torch.float32)
+                        logits = model.predict_image(test_image, encoded_metadata_row)
+                    else:
+                        logits = model.predict_image(test_image)
                     probas = softmax(logits)
                     entropy_score = entropy(probas.squeeze())
                     predictions.append(np.argmax(probas))
@@ -206,7 +205,7 @@ def evaluate_experiment(cfg, experiment_id, temperature_scaling=False, opengan=F
         )
 
     if opengan:
-        openset_label = cfg["open-set-recognition"]["openset_label"]
+        closedset_label = cfg["open-set-recognition"]["closedset_label"]
         metrics_output_csv_path = str(experiment_dir / "threshold_scores_opengan.csv")
         scores_output_path = str(experiment_dir / "competition_metrics_scores_opengan.json")
         best_threshold_path = str(experiment_dir / "best_threshold_opengan.txt")
@@ -216,7 +215,10 @@ def evaluate_experiment(cfg, experiment_id, temperature_scaling=False, opengan=F
         y_true = test_metadata["class_id"].values
         submission_df = pd.read_csv(predictions_output_csv_path)
         submission_df.drop_duplicates("observation_id", keep="first", inplace=True)
-        y_proba = submission_df["max_proba"].values if openset_label == 1 else -submission_df["max_proba"].values
+        # if closedset_label == 1, high proba == known
+        # if closedset_label == 0, then a high proba == unknown, so probas need to be inverted to work with:
+        # y_pred[y_proba < threshold] = -1
+        y_proba = submission_df["max_proba"].values if closedset_label == 1 else -submission_df["max_proba"].values
         threshold_range = np.arange(y_proba.min(), y_proba.max(), 0.01)
         best_threshold = get_best_threshold(metrics_output_csv_path, submission_df, threshold_range, y_proba,
                                             y_true)
@@ -229,9 +231,12 @@ def evaluate_experiment(cfg, experiment_id, temperature_scaling=False, opengan=F
                      scores_output_path)
 
     else:
-        for thresholding_method in ["_softmax", "_entropy"]:
+        for thresholding_method in ["_softmax", "_entropy", "_no_unknown_baseline"]:
 
-            ext += thresholding_method
+            if thresholding_method == "_no_unknown_baseline":
+                ext = thresholding_method
+            else:
+                ext += thresholding_method
             metrics_output_csv_path = str(experiment_dir / f"threshold_scores{ext}.csv")
             scores_output_path = str(experiment_dir / f"competition_metrics_scores{ext}.json")
             best_threshold_path = str(experiment_dir / f"best_threshold{ext}.txt")
@@ -249,7 +254,9 @@ def evaluate_experiment(cfg, experiment_id, temperature_scaling=False, opengan=F
                 # taking -entropy so that threshold logic will work for softmax or entropy
                 # since high softmax proba == known, but high entropy == unknown
                 y_proba = -submission_df["entropy"].values
-                threshold_range = np.arange(y_proba.min(), y_proba.max(), 0.05)
+                threshold_range = np.arange(y_proba.min(), y_proba.max(), 0.01)
+            elif thresholding_method == "_no_unknown_baseline":
+                threshold_range = None
             else:
                 raise ValueError(f"unrecognized thresholding method {thresholding_method}")
 
@@ -279,10 +286,13 @@ def create_homebrwed_scores_and_save_predictions_csv(best_threshold, predictions
 
 
 def get_best_threshold(metrics_output_csv_path, submission_df, threshold_range, y_proba, y_true):
+    if threshold_range is None:
+        return None
     scores = []
     thresholds = []
     y_pred = np.copy(submission_df["class_id"].values)
     best_threshold, threshold = None, None
+    # we actually want the *unbalanced* (micro) f1, since final competition eval is unbalanced?
     score = f1_score(y_true, y_pred, average='macro')
     best_f1 = score
     thresholds.append(threshold)
@@ -291,22 +301,12 @@ def get_best_threshold(metrics_output_csv_path, submission_df, threshold_range, 
     for threshold in threshold_range:
         y_pred = np.copy(submission_df["class_id"].values)
         y_pred[y_proba < threshold] = -1
+        # we actually want the *unbalanced* (micro) f1, since final competition eval is unbalanced?
         score = f1_score(y_true, y_pred, average='macro')
         if score > best_f1:
             best_f1 = score
             best_threshold = threshold
         print(threshold, score)
-        thresholds.append(threshold)
-        scores.append(score)
-    for k in [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2]:
-        threshold = get_threshold(y_proba, k)
-        y_pred = np.copy(submission_df["class_id"].values)
-        y_pred[y_proba < threshold] = -1
-        score = f1_score(y_true, y_pred, average='macro')
-        if score > best_f1:
-            best_f1 = score
-            best_threshold = threshold
-        print(f"iqr_k{k}", threshold, score)
         thresholds.append(threshold)
         scores.append(score)
     threshold_scores = pd.DataFrame()
@@ -358,6 +358,9 @@ def calc_homebrewed_scores(y_true, y_pred, y_pred_w_unknown):
     f1_macro_known_vs_unknown = f1_score(y_true_known_vs_unknown, y_pred_known_vs_unknown, average='macro')
     homebrewed_scores['f1_macro_known_vs_unknown'] = f1_macro_known_vs_unknown
     print("F1 macro known vs unknown:", f1_macro_known_vs_unknown)
+    f1_micro_known_vs_unknown = f1_score(y_true_known_vs_unknown, y_pred_known_vs_unknown, average='micro')
+    homebrewed_scores['f1_micro_known_vs_unknown'] = f1_micro_known_vs_unknown
+    print("F1 micro known vs unknown:", f1_micro_known_vs_unknown)
     roc_auc_known_vs_unknown = roc_auc_score(y_true_known_vs_unknown, y_pred_known_vs_unknown)
     homebrewed_scores['roc_auc_known_vs_unknown'] = roc_auc_known_vs_unknown
     print("roc_auc_known_vs_unknown:", roc_auc_known_vs_unknown)
@@ -375,22 +378,25 @@ if __name__ == "__main__":
     print(OmegaConf.to_yaml(cfg))
 
     experiment_id = cfg["evaluate"]["experiment_id"]
-    use_timm = cfg["evaluate"]["use_timm"]
     model_id = cfg["evaluate"]["model_id"]
     image_size = cfg["evaluate"]["image_size"]
 
     TRANSFORMS = get_valid_transform(image_size=image_size, pretrained=True)
 
+    copy_config("evaluate", experiment_id)
+
     outputs_precomputed = False
+
     print(f"evaluating experiment {experiment_id}")
     evaluate_experiment(cfg=cfg, experiment_id=experiment_id, from_outputs=outputs_precomputed)
+
     print("creating temperature scaled model")
     create_temperature_scaled_model(cfg)
     print(f"evaluating experiment {experiment_id} with temperature scaling")
     evaluate_experiment(cfg=cfg, experiment_id=experiment_id, temperature_scaling=True,
                         from_outputs=outputs_precomputed)
+
     print("training openGAN model")
-    train_and_select_discriminator(cfg)
+    train_and_select_discriminator(cfg, cache_embeddings=True)
     print(f"evaluating experiment {experiment_id} with openGAN")
     evaluate_experiment(cfg=cfg, experiment_id=experiment_id, opengan=True, from_outputs=outputs_precomputed)
-    # evaluate_experiment(cfg=cfg, experiment_id=experiment_id, opengan=True, from_outputs=True)

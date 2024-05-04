@@ -17,7 +17,6 @@ fc (64*4→64*2), BN, LeakyReLU,
 fc (64*2→64*4), BN, LeakyReLU, fc
 (64*4→D), Tanh.
 """
-# TODO: merge this with train_opengan since it's the same script just without the generator
 
 import os
 import copy
@@ -31,19 +30,14 @@ import torch
 from torch.utils.data import Dataset, DataLoader, ConcatDataset
 import torch.nn as nn
 import torch.optim as optim
-import hydra
+from hydra import compose, initialize
 from omegaconf import DictConfig, OmegaConf
 
 import warnings  # ignore warnings
 
-from utils import set_seed, build_models, save_discriminator_loss_plot
-from paths import EMBEDDINGS_DIR
 from closedset_model import get_embedding_size
-from datasets import get_dataloader_combine_and_balance_datasets
-
-
-# os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
-# os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+from utils import set_seed, build_models, save_loss_plots, save_discriminator_loss_plot
+from paths import EMBEDDINGS_DIR
 
 
 class FeatDataset(Dataset):
@@ -87,59 +81,57 @@ def save_model_state(discriminator, epoch, save_dir):
     torch.save(cur_model_wts, path_to_save_model_state)
 
 
-def train(discriminator, data, criterion, optimizer, device):
-    ############################
-    # (1) Update D network: maximize log(D(x)) + log(1 - D(G(z)))
-    ###########################
+def train(discriminator, data, criterion, optimizerD, device, label_smoothing_eps=0.0):
     ## Train with all-real batch
-    optimizer.zero_grad()
-    # Format batch
+    optimizerD.zero_grad()
     embeddings, labels = data
     real_cpu = embeddings.to(device)
     label = labels.float().to(device)
+    label = label * (1 - label_smoothing_eps) + (label_smoothing_eps / 2)
     output = discriminator(real_cpu).view(-1)  # Forward pass real batch through D
     dis_loss_real = criterion(output, label)  # Calculate loss on all-real batch
-    # Calculate gradients for D in backward pass
     dis_loss_real.backward()
-    D_x = output.mean().item()
-    dis_loss = dis_loss_real
-    optimizer.step()  # Update D
-    return dis_loss, D_x
+    optimizerD.step()
+
+    return dis_loss_real.mean().item()
 
 
-@hydra.main(version_base=None, config_path="conf", config_name="config")
-def main(cfg: DictConfig) -> None:
-    print(OmegaConf.to_yaml(cfg))
+def train_openganfea(cfg: DictConfig) -> str:
     embedder_experiment_id = cfg["evaluate"]["experiment_id"]
     openset_embeddings_name = cfg["open-set-recognition"]["openset_embeddings_name"]
     closedset_embeddings_name = cfg["open-set-recognition"]["closedset_embeddings_name"]
     openset_embedding_output_path = EMBEDDINGS_DIR / openset_embeddings_name
     closedset_embedding_output_path = EMBEDDINGS_DIR / closedset_embeddings_name
+    lr_d = cfg["open-set-recognition"]["dlr"]  # learning rate discriminator
+    lr_g = cfg["open-set-recognition"]["glr"]  # learning rate generator
+    seed = cfg["open-set-recognition"]["seed"]
+    num_epochs = cfg["open-set-recognition"]["epochs"]
+    batch_size = cfg["open-set-recognition"]["batch_size"]
+    nz = cfg["open-set-recognition"]["noise_vector_size"]  # Size of z latent vector (i.e. size of generator input)
+    hidden_dim_g = cfg["open-set-recognition"]["hidden_dim_g"]  # Size of feature maps in generator
+    hidden_dim_d = cfg["open-set-recognition"]["hidden_dim_d"]  # Size of feature maps in discriminator
+    openset_label = cfg["open-set-recognition"]["openset_label"]
+    closedset_label = cfg["open-set-recognition"]["closedset_label"]
 
-    model_id = cfg["evaluate"]["model_id"]
     # get embedding size from the trained evaluation (embedder) model
-    embedding_size = get_embedding_size(model_id=model_id)
+    model_id = cfg["evaluate"]["model_id"]
+    nc = get_embedding_size(model_id=model_id)
 
-    # TODO: move these params to hydra
-    exp_dir = Path(
-        '__file__').parent.absolute() / "openset_recognition_discriminators"  # experiment directory, used for reading the init model
-    project_name = f"{embedder_experiment_id}_dlr_1e-6_open1closed0_no_gen"  # we save all the checkpoints in this directory
-    SEED = 999
-    lr_d = 1e-6  # learning rate discriminator
-    num_epochs = 100  # total number of epoch in training
-    batch_size = 128
-    nz = 100  # Size of z latent vector (i.e. size of generator input)
-    hidden_dim_g = 64  # Size of feature maps in generator
-    hidden_dim_d = 64  # Size of feature maps in discriminator
+    # experiment directory, used for reading the init model
+    # TODO: move this to the paths.py module
+    exp_dir = Path('__file__').parent.absolute() / "openset_recognition_discriminators"
+
     n_gpu = 1  # Number of GPUs available. Use 0 for CPU mode.
-    openset_label = 1
-    closedset_label = 0
-    openset_examples = 100
+
+    # all checkpoints saved to this directory
+    # TODO: move this string construction to hydra
+    project_name = embedder_experiment_id
+    project_name += f"adambeta0.5_dlr_{lr_d:.0e}_glr_{lr_g:.0e}_open{openset_label}closed{closedset_label}_discriminator_only"
 
     warnings.filterwarnings("ignore")
     print(sys.version)
     print(torch.__version__)
-    set_seed(SEED)
+    set_seed(seed)
     if not os.path.exists(exp_dir):
         os.makedirs(exp_dir)
     save_dir = os.path.join(exp_dir, project_name)
@@ -148,51 +140,85 @@ def main(cfg: DictConfig) -> None:
         os.makedirs(save_dir)
 
     # set device, which gpu to use.
-    device = ('cuda:0' if torch.cuda.is_available() else 'cpu')
+    device = ('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"using device {device}")
 
     torch.cuda.device_count()
     torch.cuda.empty_cache()
 
-    _, discriminator = build_models(nz, hidden_dim_g, embedding_size, hidden_dim_d, device, n_gpu)
+    generator, discriminator = build_models(nz, hidden_dim_g, nc, hidden_dim_d, device, n_gpu)
+
+    noise = torch.randn(batch_size, nz, device=device)
+    fake = generator(noise)  # Generate fake image batch with G
+    predLabel = discriminator(fake)
+    print("sanity checks:")
+    print("noise shape:", noise.shape)
+    print("fake embedding from generator shape:", fake.shape)
+    print("label from discriminator shape:", predLabel.shape)
 
     print("making closedset dataset")
     closedset_embeddings = get_cached_data(closedset_embedding_output_path)
+    # if n_closed_examples < closedset_embeddings.shape[0]:
+    #     closedset_embeddings = closedset_embeddings[:n_closed_examples, ...]
     closedset_dataset = FeatDataset(data=closedset_embeddings, label=closedset_label)
 
     print("making openset dataset")
     openset_embeddings = get_cached_data(openset_embedding_output_path)
-    if openset_examples < openset_embeddings.shape[0]:
-        openset_embeddings = openset_embeddings[:openset_examples, ...]
+    # if n_open_examples < openset_embeddings.shape[0]:
+    #     openset_embeddings = openset_embeddings[:n_open_examples, ...]
     openset_dataset = FeatDataset(data=openset_embeddings, label=openset_label)
 
     print("combining dataloaders and balancing classes")
-    dataloader = get_dataloader_combine_and_balance_datasets(openset_dataset, closedset_dataset)
+    dataset = ConcatDataset([openset_dataset, closedset_dataset])
+    target = np.array(openset_dataset.target + closedset_dataset.target)
+    # https://pytorch.org/docs/stable/data.html
+    # https://discuss.pytorch.org/t/how-to-handle-imbalanced-classes/11264
+    class_sample_count = np.array([len(np.where(target == t)[0]) for t in np.unique(target)])
+    weight_per_class = 1. / class_sample_count
+    weight_per_sample = np.array([weight_per_class[class_idx] for class_idx in target])
+    weight_per_sample = torch.from_numpy(weight_per_sample)
+    weight_per_sample = weight_per_sample.double()
+    sampler = torch.utils.data.sampler.WeightedRandomSampler(weight_per_sample, len(weight_per_sample))
+    # TODO: this should be configured from hydra
+    dataloader = DataLoader(dataset, batch_size=batch_size, sampler=sampler,
+                            num_workers=16,
+                            timeout=120,
+                            # persistent_workers=True,
+                            )
 
     # Initialize BCELoss function
     criterion = nn.BCELoss()
 
     # Setup Adam optimizers for both G and D
-    optimizerD = optim.Adam(discriminator.parameters(), lr=lr_d)
+    # https://neptune.ai/blog/gan-failure-modes beta is actually an important hyperparameter for GAN training
+    optimizerD = optim.Adam(discriminator.parameters(), lr=lr_d, betas=(0.5, 0.999))
 
     dis_losses = []
+    iters = 0
     print("Starting Training Loop...")
     for epoch in range(num_epochs):
         for i, data in enumerate(dataloader):
-            train_outs = train(discriminator, data, criterion, optimizerD, device)
-            dis_loss, dis_x = train_outs
+            dis_loss = train(discriminator, data, criterion, optimizerD, device)
 
             # Output training stats
             if i % 200 == 0:
-                print('[%d/%d][%d/%d]\tLoss_D: %.4f\tD(x): %.4f'
-                      % (epoch, num_epochs, i, len(dataloader), dis_loss.item(), dis_x))
+                print((f"[{epoch}/{num_epochs}][{i + 1}/{len(dataloader)}]"
+                       f"\tLoss_D: {dis_loss: .4f}"))
 
             # Save Losses for plotting later
-            dis_losses.append(dis_loss.item())
+            dis_losses.append(dis_loss)
+
+            iters += 1
 
         save_model_state(discriminator, epoch, save_dir)
         save_discriminator_loss_plot(dis_losses, project_name, save_dir)
 
+    return project_name
+
 
 if __name__ == "__main__":
-    main()
+    # using this instead of @hydra.main decorator so main function can be called from elsewhere
+    with initialize(version_base=None, config_path="conf", job_name="evaluate"):
+        cfg = compose(config_name="config")
+    print(OmegaConf.to_yaml(cfg))
+    train_openganfea(cfg)

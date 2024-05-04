@@ -4,6 +4,8 @@ import torch
 from torch import nn, optim
 from torch.nn import functional as F
 
+from utils import get_model_preds
+
 
 class ModelWithTemperature(nn.Module):
     """
@@ -19,8 +21,11 @@ class ModelWithTemperature(nn.Module):
         self.model = model
         self.temperature = nn.Parameter(torch.ones(1) * 1.5)
 
-    def forward(self, input):
-        logits = self.model(input)
+    def forward(self, image, metadata=None):
+        if metadata is not None:
+            logits = self.model(image, metadata)
+        else:
+            logits = self.model(image)
         return self.temperature_scale(logits)
 
     def temperature_scale(self, logits):
@@ -38,7 +43,8 @@ class ModelWithTemperature(nn.Module):
         We're going to set it to optimize NLL.
         valid_loader (DataLoader): validation set loader
         """
-        self.cuda()
+        device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+        self.to(device)
         nll_criterion = nn.CrossEntropyLoss().cuda()
         ece_criterion = _ECELoss().cuda()
 
@@ -47,8 +53,7 @@ class ModelWithTemperature(nn.Module):
         labels_list = []
         with torch.no_grad():
             for input, label in valid_loader:
-                input = input.cuda()
-                logits = self.model(input)
+                logits = get_model_preds(input, self.model, device)
                 logits_list.append(logits)
                 labels_list.append(label)
             logits = torch.cat(logits_list).cuda()
