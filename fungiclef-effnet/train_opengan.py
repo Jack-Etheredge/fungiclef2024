@@ -199,14 +199,14 @@ def train_openganfea(cfg: DictConfig) -> str:
     print("label from discriminator shape:", predLabel.shape)
 
     training_augs = True
-    openset_dataset, _, _ = get_openset_datasets(pretrained=pretrained, image_size=image_size,
+    openset_dataset, _, _ = get_openset_datasets(cfg, pretrained=pretrained, image_size=image_size,
                                                  n_train=openset_n_train, n_val=openset_n_val,
                                                  include_metadata=use_metadata, training_augs=training_augs)
     openset_dataset.target = [openset_label] * len(openset_dataset.target)
     # openset_loader = torch.utils.data.DataLoader(openset_dataset, batch_size=batch_size,
     #                                              shuffle=False, num_workers=n_workers, collate_fn=collate_fn,
     #                                              timeout=worker_timeout_s)
-    closedset_dataset, _, _ = get_datasets(pretrained=pretrained, image_size=image_size,
+    closedset_dataset, _, _ = get_datasets(cfg, pretrained=pretrained, image_size=image_size,
                                            validation_frac=validation_frac,
                                            oversample=oversample, undersample=undersample,
                                            oversample_prop=oversample_prop,

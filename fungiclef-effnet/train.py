@@ -333,7 +333,7 @@ def create_train_val_loaders(cfg):
     osrcfg = cfg["open-set-recognition"]
 
     # Load the training and validation datasets.
-    closed_dataset_train, closed_dataset_val, _ = get_datasets(tcfg["pretrained"], tcfg["image_resize"],
+    closed_dataset_train, closed_dataset_val, _ = get_datasets(cfg, tcfg["pretrained"], tcfg["image_resize"],
                                                                tcfg["validation_frac"],
                                                                oversample=tcfg["oversample"],
                                                                undersample=tcfg["undersample"],
@@ -344,7 +344,7 @@ def create_train_val_loaders(cfg):
                                                                    "use_metadata"])
 
     if tcfg["include_unknowns"]:
-        open_dataset_train, open_dataset_val, _ = get_openset_datasets(pretrained=tcfg["pretrained"],
+        open_dataset_train, open_dataset_val, _ = get_openset_datasets(cfg, pretrained=tcfg["pretrained"],
                                                                        image_size=tcfg["image_resize"],
                                                                        n_train=osrcfg["openset_n_train"],
                                                                        n_val=osrcfg["openset_n_val"],

@@ -32,6 +32,10 @@ train:
   lr_scheduler: "reducelronplateau"
   lr_scheduler_patience: 4
   use_metadata: False
+train_aug:
+  trivial_aug: True
+  auto_aug: False
+  random_aug: False
 progressive-learning:
   start_image_size: 384
   end_image_size: 384

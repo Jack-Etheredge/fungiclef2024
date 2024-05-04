@@ -33,7 +33,7 @@ def create_temperature_scaled_model(cfg: DictConfig) -> None:
     temp_scaled_model_filename = experiment_dir / "model_with_temperature.pth"
 
     # Load the training and validation datasets.
-    dataset_train, dataset_valid, dataset_classes = get_datasets(pretrained, image_resize, validation_frac,
+    dataset_train, dataset_valid, dataset_classes = get_datasets(cfg, pretrained, image_resize, validation_frac,
                                                                  oversample=oversample, undersample=undersample,
                                                                  oversample_prop=oversample_prop,
                                                                  equal_undersampled_val=equal_undersampled_val,

@@ -70,27 +70,32 @@ WORKER_TIMEOUT_SECS = 120
 
 
 # Training transforms
-def get_train_transform(image_size, pretrained, max_image_size=300):
+def get_train_transform(cfg, image_size, pretrained):
     """
     training transformations
     : param image_size: Image size of resize when applying transforms.
     """
     # resize = max(image_size + 8, max_image_size)
     resize = image_size * 2
-    train_transform = v2.Compose([
+
+    train_augs = [
         v2.Resize(resize, interpolation=InterpolationMode.BICUBIC, antialias=True),
-        # v2.CenterCrop(224),
         v2.RandomCrop(image_size),
-        v2.TrivialAugmentWide(interpolation=InterpolationMode.BICUBIC),
-        # v2.AutoAugment(interpolation=InterpolationMode.BICUBIC),
-        # v2.RandomHorizontalFlip(p=0.5),
-        # v2.RandomApply([v2.GaussianBlur(kernel_size=(5, 9), sigma=(0.1, 5))], p=0.5),
-        # v2.RandomAdjustSharpness(sharpness_factor=2, p=0.5),
-        # v2.RandomAutocontrast(),
-        # v2.ToTensor(),
+    ]
+
+    if cfg["train_aug"]["trivial_aug"]:
+        train_augs.append(v2.TrivialAugmentWide(interpolation=InterpolationMode.BICUBIC))
+    elif cfg["train_aug"]["auto_aug"]:
+        train_augs.append(v2.AutoAugment(interpolation=InterpolationMode.BICUBIC))
+    elif cfg["train_aug"]["random_aug"]:
+        train_augs.append(v2.RandAugment(interpolation=InterpolationMode.BICUBIC))
+
+    train_augs.extend([
         v2.Compose([v2.ToImage(), v2.ToDtype(torch.float32, scale=True)]),
         normalize_transform(pretrained)
     ])
+
+    train_transform = v2.Compose(train_augs)
     return train_transform
 
 
@@ -103,7 +108,6 @@ def get_valid_transform(image_size, pretrained):
     valid_transform = v2.Compose([
         v2.Resize(resize, interpolation=InterpolationMode.BICUBIC, antialias=True),
         v2.CenterCrop(image_size),
-        # v2.ToTensor(),
         v2.Compose([v2.ToImage(), v2.ToDtype(torch.float32, scale=True)]),
         normalize_transform(pretrained)
     ])
@@ -125,7 +129,7 @@ def normalize_transform(pretrained):
     return normalize
 
 
-def get_datasets(pretrained, image_size, validation_frac, oversample=False, undersample=False,
+def get_datasets(cfg, pretrained, image_size, validation_frac, oversample=False, undersample=False,
                  oversample_prop=0.1, equal_undersampled_val=True, seed=42, include_metadata=False, training_augs=True):
     """
     Function to prepare the Datasets.
@@ -137,7 +141,7 @@ def get_datasets(pretrained, image_size, validation_frac, oversample=False, unde
     dataset = CustomImageDataset(
         label_file_path=METADATA_DIR / "FungiCLEF2023_train_metadata_PRODUCTION.csv",
         img_dir=DATA_DIR / "DF20",
-        transform=((get_train_transform(image_size, pretrained)) if training_augs else
+        transform=((get_train_transform(cfg, image_size, pretrained)) if training_augs else
                    (get_valid_transform(image_size, pretrained))),  # this is the difference
         include_metadata=include_metadata,
     )
@@ -344,7 +348,7 @@ def get_data_loaders(train_dataset, val_dataset, batch_size, num_workers, balanc
     return train_loader, valid_loader
 
 
-def get_openset_datasets(pretrained, image_size, n_train=2000, n_val=200, seed=42, training_augs=True,
+def get_openset_datasets(cfg, pretrained, image_size, n_train=2000, n_val=200, seed=42, training_augs=True,
                          include_metadata=False):
     """
     Function to prepare the Datasets.
@@ -359,7 +363,7 @@ def get_openset_datasets(pretrained, image_size, n_train=2000, n_val=200, seed=4
         label_file_path=METADATA_DIR / "FungiCLEF2023_val_metadata_PRODUCTION.csv",
         img_dir=DATA_DIR / "DF21",
         keep_only={-1},
-        transform=((get_train_transform(image_size, pretrained)) if training_augs else
+        transform=((get_train_transform(cfg, image_size, pretrained)) if training_augs else
                    (get_valid_transform(image_size, pretrained))),  # this is the difference
         include_metadata=include_metadata
     )
