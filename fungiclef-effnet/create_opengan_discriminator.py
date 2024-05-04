@@ -34,17 +34,11 @@ class CompositeOpenGANInferenceModel(nn.Module):
     def forward(self, image, metadata_row=None):
         if metadata_row is not None:
             # handle metaformer case
-            intermediate_features = self.model.forward_features(image, metadata_row).squeeze()
+            intermediate_features = self.model.forward_features(image, metadata_row)
         else:
-            intermediate_features = self.model.forward_features(image).squeeze()
-        # intermediate_features = self.model.forward_features(input).squeeze()
+            intermediate_features = self.model.forward_features(image)
         final_features = self.model.forward_head(intermediate_features, pre_logits=True)
-        if final_features.dim() == 1:
-            final_features = final_features.unsqueeze(0)
-
         model_probas = self.model.forward_head(intermediate_features, pre_logits=False)
-        if model_probas.dim() == 1:
-            model_probas = model_probas.unsqueeze(0)
 
         model_preds = torch.argmax(model_probas, dim=1)
         if model_preds.dim() == 1:
