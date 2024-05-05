@@ -7,9 +7,8 @@ from PIL import Image
 
 
 class Grid(object):
-    def __init__(self, rotate=1, ratio=0.5, mode=0, prob=1.):
+    def __init__(self, rotate=1, mode=0, prob=1.):
         self.rotate = rotate
-        self.ratio = ratio
         self.mode = mode
         self.prob = prob
 
