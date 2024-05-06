@@ -148,7 +148,6 @@ def train_model(cfg: DictConfig) -> None:
     balanced_sampler = cfg["train"]["balanced_sampler"]
     use_lr_finder = cfg["train"]["use_lr_finder"]
     fine_tune_after_n_epochs = cfg["train"]["fine_tune_after_n_epochs"]
-    skip_frozen_epochs_load_failed_model = cfg["train"]["skip_frozen_epochs_load_failed_model"]
     lr_scheduler = cfg["train"]["lr_scheduler"]
     lr_scheduler_patience = cfg["train"]["lr_scheduler_patience"]
     n_classes = cfg["train"]["n_classes"]
@@ -160,7 +159,7 @@ def train_model(cfg: DictConfig) -> None:
 
     experiment_id = cfg["train"]["experiment_id"]
     if experiment_id is None:
-        experiment_id = str(datetime.now())
+        experiment_id = str(datetime.now()).replace(" ", "-")
         cfg["train"]["experiment_id"] = experiment_id
 
     if balanced_sampler and (oversample or undersample):
@@ -189,7 +188,7 @@ def train_model(cfg: DictConfig) -> None:
     model = build_model(
         model_id=model_id,
         pretrained=pretrained,
-        fine_tune=not fine_tune_after_n_epochs or skip_frozen_epochs_load_failed_model,
+        fine_tune=not fine_tune_after_n_epochs,
         num_classes=n_classes,
         dropout_rate=dropout_rate,
     ).to(device)
@@ -212,7 +211,8 @@ def train_model(cfg: DictConfig) -> None:
         start_epoch = best_epoch + 1
         try:
             optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-            optimizer.param_groups[0]["lr"] = lr
+            for group in optimizer.param_groups:
+                group["lr"] = lr
             print("loaded optimizer state but replaced lr")
         except Exception as e:
             print(f"unable to load optimizer state due to {e}")
@@ -243,14 +243,7 @@ def train_model(cfg: DictConfig) -> None:
                               use_logitnorm=use_logitnorm)
 
     if use_lr_finder:
-        lr_finder = LRFinder(model, optimizer, criterion, device=device)
-        lr_finder.range_test(train_loader, start_lr=1e-6, end_lr=100, num_iter=100)
-        lr_finder.plot()  # to inspect the loss-learning rate graph
-        lr_finder.reset()  # to reset the model and optimizer to their initial state
-        min_grad_idx = (np.gradient(np.array(lr_finder.history["loss"]))).argmin()
-        lr = lr_finder.history["lr"][min_grad_idx]
-        print(f"Setting LR to {lr} according to LR finder.")
-        optimizer.param_groups[0]["lr"] = lr
+        optimizer, lr = update_optimizer_lr_finder(criterion, device, model, optimizer, train_loader)
 
     # Lists to keep track of losses and accuracies.
     train_loss, valid_loss = [], []
@@ -259,10 +252,17 @@ def train_model(cfg: DictConfig) -> None:
     unfrozen = fine_tune_after_n_epochs == 0
     for epoch in range(start_epoch, epochs):
 
-        if (not unfrozen and (skip_frozen_epochs_load_failed_model or
-                              epoch + 1 > fine_tune_after_n_epochs)):
+        if not unfrozen and epoch + 1 > fine_tune_after_n_epochs:
             model = unfreeze_model(model)
             print("all layers unfrozen")
+
+            if cfg["train"]["use_metadata"]:
+                print("manually stepping down LR after unfreeze since LR finder is incompatible with multi-input model")
+                lr = cfg["train"]["lr_after_unfreeze"]
+            if use_lr_finder:
+                print("finding new best LR after unfreezing weights")
+                optimizer, lr = update_optimizer_lr_finder(criterion, device, model, optimizer, train_loader)
+
             optimizer, scheduler = create_scheduler_and_optimizer(model, lr, weight_decay, lr_scheduler,
                                                                   lr_scheduler_patience)
             unfrozen = True
@@ -326,6 +326,19 @@ def train_model(cfg: DictConfig) -> None:
     # print('evaluating')
     # evaluate_experiment(cfg, experiment_id)
     # print('EVALUATION COMPLETE')
+
+
+def update_optimizer_lr_finder(criterion, device, model, optimizer, train_loader):
+    lr_finder = LRFinder(model, optimizer, criterion, device=device)
+    lr_finder.range_test(train_loader, start_lr=1e-6, end_lr=100, num_iter=100)
+    lr_finder.plot()  # to inspect the loss-learning rate graph
+    lr_finder.reset()  # to reset the model and optimizer to their initial state
+    min_grad_idx = (np.gradient(np.array(lr_finder.history["loss"]))).argmin()
+    lr = lr_finder.history["lr"][min_grad_idx]
+    print(f"Setting LR to {lr} according to LR finder.")
+    for group in optimizer.param_groups:
+        group["lr"] = lr
+    return optimizer, lr
 
 
 def create_train_val_loaders(cfg):

@@ -1,10 +1,11 @@
 # reference: https://hydra.cc/docs/tutorials/basic/your_first_app/using_config/
 train:
-  experiment_id: "2024-05-05 00:15:57.933872"
-  model_id: "tf_efficientnetv2_s.in21k"  # "MetaFG_meta_0"
+  experiment_id: "2024-05-06-12:01:30.699834"
+  model_id: "MetaFG_meta_0"  # "tf_efficientnetv2_s.in21k"  # "MetaFG_meta_0"
+  use_metadata: True  # check me
   epochs: 200
-  lr: 2e-6  # found with lr finder, stepping down by 1/10 after loader failure
-  lr_after_unfreeze: 1e-4
+  lr: 1e-3  # found with lr finder, stepping down by 1/10 after loader failure
+  lr_after_unfreeze: 5e-5
   use_lr_finder: False  # incompatible with multi-input or multi-output models without modification
   pretrained: True
   early_stop_thresh: 10
@@ -12,26 +13,24 @@ train:
   use_poison_loss: True  # check me
   use_logitnorm: True  # check me
   include_unknowns: False  # check me
-  batch_size: 64  # 128 works for up to tf_efficientnetv2_s.in21k
+  batch_size: 32  # 128 works for up to tf_efficientnetv2_s.in21k
   num_dataloader_workers: 12
   worker_timeout_s: 360
-  image_resize: 300  # 224 for efficientnet_b0, 128-300+ efficientnet_v2s; 336 for eva-02
+  image_resize: 384  # 224 for efficientnet_b0, 128-300+ efficientnet_v2s; 336 for eva-02
   validation_frac: 0.1
   max_norm: 1.0
   undersample: False
   oversample: False
   equal_undersampled_val: True
   oversample_prop: 0.1
-  dropout_rate: 0.2
-  weight_decay: 1e-2  # 0.05 for metaformer  # originally 1e-2 for eva-02
+  dropout_rate: 0.3
+  weight_decay: 0.05 # 1e-2 for efficientnetv2_s  # 0.05 for metaformer  # originally 1e-2 for eva-02
   balanced_sampler: False
   fine_tune_after_n_epochs: 5
-  skip_frozen_epochs_load_failed_model: True  # check me
   notes: trivial aug, double resize before randomcrop # check me
   n_classes: 1604
   lr_scheduler: "reducelronplateau"
   lr_scheduler_patience: 4
-  use_metadata: False
 train_aug:
   trivial_aug: True
   auto_aug: False
