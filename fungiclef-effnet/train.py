@@ -323,9 +323,9 @@ def train_model(cfg: DictConfig) -> None:
                loss_plot_path=loss_plot_path)
     print('TRAINING COMPLETE')
 
-    print('evaluating')
-    evaluate_experiment(cfg, experiment_id)
-    print('EVALUATION COMPLETE')
+    # print('evaluating')
+    # evaluate_experiment(cfg, experiment_id)
+    # print('EVALUATION COMPLETE')
 
 
 def create_train_val_loaders(cfg):

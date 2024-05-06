@@ -61,8 +61,6 @@ Habitat = [
 
 ]  # contains nan
 
-IMG_EXTENSIONS = ['.png', '.jpg', '.jpeg']
-
 # dataset loading issue
 # https://github.com/eriklindernoren/PyTorch-YOLOv3/issues/162
 Image.MAX_IMAGE_PIXELS = None
@@ -77,7 +75,7 @@ def get_train_transform(cfg, image_size, pretrained):
     : param image_size: Image size of resize when applying transforms.
     """
     # resize = max(image_size + 8, max_image_size)
-    resize = image_size * 2
+    resize = max(384 * 2, image_size * 2)  # resized dataset to 768
 
     train_augs = [
         v2.Resize(resize, interpolation=InterpolationMode.BICUBIC, antialias=True),
