@@ -70,8 +70,8 @@ def build_model(model_id='tf_efficientnetv2_s.in21k', pretrained=True, fine_tune
         if pretrained:
             # TODO: consider moving this pathing to hydra config
             filenames = {"MetaFG_meta_0": "metafg_0_inat21_384.pth",
-                         "MetaFG_meta_1": None,
-                         "MetaFG_meta_2": "metafg_0_inat21_384.pth", }
+                         "MetaFG_meta_1": "metafg_1_inat21_384.pth",
+                         "MetaFG_meta_2": "metafg_2_inat21_384.pth", }
             filename = filenames.get(model_id)
             if filename is None:
                 raise ValueError(f"no associated filename with model_id {model_id}")
