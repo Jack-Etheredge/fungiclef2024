@@ -185,30 +185,29 @@ def train_model(cfg: DictConfig) -> None:
     print(f"Learning rate: {lr}")
     print(f"Epochs to train for: {epochs}\n")
 
-    model = build_model(
-        model_id=model_id,
-        pretrained=pretrained,
-        fine_tune=not fine_tune_after_n_epochs,
-        num_classes=n_classes,
-        dropout_rate=dropout_rate,
-    ).to(device)
-
     # TODO: refine/replace this logic
     resume_from_checkpoint = model_file_path if Path(model_file_path).exists() else None
     if resume_from_checkpoint:
         print(f"resuming from checkpoint: {model_file_path}")
         # https://pytorch.org/tutorials/beginner/saving_loading_models.html
         checkpoint = torch.load(resume_from_checkpoint)
-        model.load_state_dict(checkpoint['model_state_dict'])
-        optimizer, scheduler = create_scheduler_and_optimizer(model, lr, weight_decay, lr_scheduler,
-                                                              lr_scheduler_patience)
+        best_validation_loss = checkpoint['validation_loss']
+        best_epoch = checkpoint['epoch']
         # Start epoch counter from the checkpoint epoch and set the validation loss so that the model checkpoint isn't
         #   automatically updated on the first epoch after resuming training.
         # There are edge cases where this behavior might not be desired such as fine-tuning with a different
         #   loss function and/or dataset such that the validation loss increases but still represents model improvement.
-        best_validation_loss = checkpoint['validation_loss']
-        best_epoch = checkpoint['epoch']
         start_epoch = best_epoch + 1
+        model = build_model(
+            model_id=model_id,
+            pretrained=pretrained,
+            fine_tune=not fine_tune_after_n_epochs or start_epoch >= fine_tune_after_n_epochs,
+            num_classes=n_classes,
+            dropout_rate=dropout_rate,
+        ).to(device)
+        model.load_state_dict(checkpoint['model_state_dict'])
+        optimizer, scheduler = create_scheduler_and_optimizer(model, lr, weight_decay, lr_scheduler,
+                                                              lr_scheduler_patience)
         try:
             optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
             for group in optimizer.param_groups:
@@ -218,6 +217,13 @@ def train_model(cfg: DictConfig) -> None:
             print(f"unable to load optimizer state due to {e}")
         model.to(device)
     else:
+        model = build_model(
+            model_id=model_id,
+            pretrained=pretrained,
+            fine_tune=not fine_tune_after_n_epochs,
+            num_classes=n_classes,
+            dropout_rate=dropout_rate,
+        ).to(device)
         best_validation_loss = float("inf")
         best_epoch, start_epoch = 0, 0
         optimizer, scheduler = create_scheduler_and_optimizer(model, lr, weight_decay, lr_scheduler,
@@ -256,12 +262,12 @@ def train_model(cfg: DictConfig) -> None:
             model = unfreeze_model(model)
             print("all layers unfrozen")
 
-            if cfg["train"]["use_metadata"]:
+            if cfg["train"]["use_metadata"] or not use_lr_finder:
                 print("manually stepping down LR after unfreeze since LR finder is incompatible with multi-input model")
                 lr = cfg["train"]["lr_after_unfreeze"]
-            if use_lr_finder:
-                print("finding new best LR after unfreezing weights")
-                optimizer, lr = update_optimizer_lr_finder(criterion, device, model, optimizer, train_loader)
+            # if use_lr_finder:
+            #     print("finding new best LR after unfreezing weights")
+            #     optimizer, lr = update_optimizer_lr_finder(criterion, device, model, optimizer, train_loader)
 
             optimizer, scheduler = create_scheduler_and_optimizer(model, lr, weight_decay, lr_scheduler,
                                                                   lr_scheduler_patience)
@@ -288,7 +294,7 @@ def train_model(cfg: DictConfig) -> None:
             try:
                 valid_epoch_loss, valid_epoch_acc = validate(model, val_loader,
                                                              criterion, device)
-                if scheduler:
+                if scheduler is not None:
                     scheduler.step(valid_epoch_loss)
                 recreate_loader = False
             except Exception as e:
@@ -330,11 +336,13 @@ def train_model(cfg: DictConfig) -> None:
 
 def update_optimizer_lr_finder(criterion, device, model, optimizer, train_loader):
     lr_finder = LRFinder(model, optimizer, criterion, device=device)
-    lr_finder.range_test(train_loader, start_lr=1e-6, end_lr=100, num_iter=100)
+    lr_finder.range_test(train_loader, start_lr=1e-9, end_lr=100, num_iter=100)
     lr_finder.plot()  # to inspect the loss-learning rate graph
     lr_finder.reset()  # to reset the model and optimizer to their initial state
-    min_grad_idx = (np.gradient(np.array(lr_finder.history["loss"]))).argmin()
-    lr = lr_finder.history["lr"][min_grad_idx]
+    lrs = lr_finder.history["lr"][10:-5]
+    losses = lr_finder.history["loss"][10:-5]
+    min_grad_idx = (np.gradient(np.array(losses))).argmin()
+    lr = lrs[min_grad_idx]
     print(f"Setting LR to {lr} according to LR finder.")
     for group in optimizer.param_groups:
         group["lr"] = lr

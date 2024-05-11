@@ -79,7 +79,16 @@ def build_model(model_id='tf_efficientnetv2_s.in21k', pretrained=True, fine_tune
             pretrained_model_path = str(Path(pretrained_model_path).expanduser().absolute())
             load_pretrained_metaformer(model, pretrained_model_path)
     else:
-        model = timm.create_model(model_id, pretrained=pretrained)
+        # model = timm.create_model(model_id, pretrained=pretrained)
+        model = timm.create_model(model_id, pretrained=pretrained, num_classes=num_classes)
+        # layers = list(model.children())
+        # while layers:
+        #     layer = layers.pop()
+        #     if isinstance(layer, nn.Dropout):
+        #         layer.p = dropout_rate
+        #         print("updated dropout rate of model internally")
+        #     if layer.children():
+        #         layers.extend(layer.children())
     if fine_tune:
         print('Fine-tuning all layers...')
         for params in model.parameters():
@@ -89,15 +98,45 @@ def build_model(model_id='tf_efficientnetv2_s.in21k', pretrained=True, fine_tune
         for params in model.parameters():
             params.requires_grad = False
     # Change the final classification head.
+    # if hasattr(model, "classifier"):
+    #     model.classifier = nn.Sequential(nn.Dropout(p=dropout_rate, inplace=True),
+    #                                      nn.Linear(in_features=model.classifier.in_features,
+    #                                                out_features=num_classes))
+    # elif hasattr(model, "head"):
+    #     model.head = nn.Sequential(nn.Dropout(p=dropout_rate, inplace=True),
+    #                                nn.Linear(in_features=model.head.in_features, out_features=num_classes))
+    # else:
+    #     raise ValueError("Model doesn't contain head or classifier and thus doesn't conform to expected API.")
     if hasattr(model, "classifier"):
-        model.classifier = nn.Sequential(nn.Dropout(p=dropout_rate, inplace=True),
-                                         nn.Linear(in_features=model.classifier.in_features,
-                                                   out_features=num_classes))
+        head_pointer = model.classifier
     elif hasattr(model, "head"):
-        model.head = nn.Sequential(nn.Dropout(p=dropout_rate, inplace=True),
-                                   nn.Linear(in_features=model.head.in_features, out_features=num_classes))
+        head_pointer = model.head
     else:
         raise ValueError("Model doesn't contain head or classifier and thus doesn't conform to expected API.")
+    for params in head_pointer.parameters():
+        params.requires_grad = True
+    # check recursively for dropout layers and update the dropout rate of each of them; if no dropout layer is found,
+    # add one at the start of the head
+    dropout_found = False
+    layers = list(head_pointer.children())
+    while layers:
+        layer = layers.pop()
+        if isinstance(layer, nn.Dropout):
+            dropout_found = True
+            layer.p = dropout_rate
+        if layer.children():
+            layers.extend(layer.children())
+    if not dropout_found:
+        if hasattr(model, "classifier"):
+            model.classifier = nn.Sequential(
+                nn.Dropout(p=dropout_rate, inplace=True),
+                head_pointer,
+            )
+        elif hasattr(model, "head"):
+            model.head = nn.Sequential(
+                nn.Dropout(p=dropout_rate, inplace=True),
+                head_pointer,
+            )
     return model
 
 

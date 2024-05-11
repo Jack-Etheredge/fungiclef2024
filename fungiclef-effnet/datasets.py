@@ -96,6 +96,9 @@ def get_train_transform(cfg, image_size, pretrained):
 
     if cfg["train_aug"]["gridmask_prob"] is not None and cfg["train_aug"]["gridmask_prob"] > 0.0:
         train_augs.append(Grid(360, 0, cfg["train_aug"]["gridmask_prob"]))
+    
+    if cfg["train_aug"]["random_erasing_prob"] is not None and cfg["train_aug"]["random_erasing_prob"] > 0.0:
+        train_augs.append(v2.RandomErasing(cfg["train_aug"]["random_erasing_prob"]))
 
     train_transform = v2.Compose(train_augs)
     return train_transform
@@ -139,6 +142,73 @@ def get_datasets(cfg, pretrained, image_size, validation_frac, oversample=False,
     Returns the training and validation datasets along
     with the class names.
     """
+
+    if cfg["train"]["new_data_split"]:
+        print("using new data split. ignoring other variables such as `equal_undersampled_val` and `undersample`.")
+
+        train_20 = CustomImageDataset(
+            label_file_path=METADATA_DIR / "FungiCLEF2023_train_metadata_PRODUCTION.csv",
+            img_dir=DATA_DIR / "DF20",
+            transform=((get_train_transform(cfg, image_size, pretrained)) if training_augs else
+                       (get_valid_transform(image_size, pretrained))),  # this is the difference
+            include_metadata=include_metadata,
+        )
+        train_21 = CustomImageDataset(
+            label_file_path=METADATA_DIR / "FungiCLEF2023_val_metadata_PRODUCTION.csv",
+            img_dir=DATA_DIR / "DF21",
+            transform=((get_train_transform(cfg, image_size, pretrained)) if training_augs else
+                       (get_valid_transform(image_size, pretrained))),  # this is the difference
+            include_metadata=include_metadata,
+            exclude={-1},
+        )
+        val_20 = CustomImageDataset(
+            label_file_path=METADATA_DIR / "FungiCLEF2023_train_metadata_PRODUCTION.csv",
+            img_dir=DATA_DIR / "DF20",
+            transform=(get_valid_transform(image_size, pretrained)),  # only difference
+            include_metadata=include_metadata,
+        )
+        val_21 = CustomImageDataset(
+            label_file_path=METADATA_DIR / "FungiCLEF2023_val_metadata_PRODUCTION.csv",
+            img_dir=DATA_DIR / "DF21",
+            transform=(get_valid_transform(image_size, pretrained)),  # only difference
+            include_metadata=include_metadata,
+            exclude={-1},
+        )
+        total_train = ConcatDataset([train_20, train_21])
+        total_val = ConcatDataset([val_20, val_21])
+        total_train.target = np.array([list(train_20.target) + list(train_21.target)]).squeeze()
+        total_val.target = np.array([list(train_20.target) + list(train_21.target)]).squeeze()
+
+        # get the indices for the train and val datasets where val is max(10% total samples, 3)
+        train_indices = []
+        val_indices = []
+        for cls in np.unique(val_20.target):
+            cls_count = sum(total_train.target == cls)
+            # cls_count = sum(train_21.target == cls)  # take 10% from DF21, not 10% total
+            n_val_samples = max(int(0.1 * cls_count), 3)
+            all_indices = np.where(total_train.target == cls)[0]
+            val_indices.extend(all_indices[-n_val_samples:])
+            train_indices.extend(all_indices[:-n_val_samples])
+
+        # # data integrity checks
+        # # assert no overlap
+        # assert len(train_indices) + len(val_indices) == len(total_train)
+        # # assert val has at least 3 samples per class
+        # val_counts = Counter(total_train.target[val_indices].tolist())
+        # assert all([v >= 3 for v in val_counts.values()])
+        # # assert train is 90% of each class except for classes for which val has 3 samples
+        # train_counts = Counter(total_train.target[train_indices].tolist())
+        # for k, v in train_counts.items():
+        #     if val_counts[k] == 3:
+        #         assert train_counts[k] > 3
+        #         continue
+        #     assert v >= 0.9 * (val_counts[k] + v)
+
+        train_dataset = Subset(total_train, indices=train_indices)
+        train_dataset.target = total_train.target[train_indices]
+        val_dataset = Subset(total_val, indices=val_indices)
+        val_dataset.target = total_val.target[val_indices]
+        return train_dataset, val_dataset, train_20.classes
 
     dataset = CustomImageDataset(
         label_file_path=METADATA_DIR / "FungiCLEF2023_train_metadata_PRODUCTION.csv",
