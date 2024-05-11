@@ -11,9 +11,7 @@ from datasets import get_data_loaders, get_datasets
 def create_temperature_scaled_model(cfg: DictConfig) -> None:
     n_classes = cfg["train"]["n_classes"]
     pretrained = cfg["train"]["pretrained"]
-    batch_size = cfg["train"]["batch_size"]
     num_dataloader_workers = cfg["train"]["num_dataloader_workers"]
-    image_resize = cfg["train"]["image_resize"]
     validation_frac = cfg["train"]["validation_frac"]
     undersample = cfg["train"]["undersample"]
     oversample = cfg["train"]["oversample"]
@@ -23,7 +21,9 @@ def create_temperature_scaled_model(cfg: DictConfig) -> None:
 
     experiment_id = cfg["evaluate"]["experiment_id"]
     model_id = cfg["evaluate"]["model_id"]
+    image_resize = cfg["evaluate"]["image_size"]
     use_metadata = cfg["evaluate"]["use_metadata"]
+    batch_size = cfg["evaluate"]["batch_size"]
 
     print(f"creating temperature scaled model {experiment_id}")
 
