@@ -12,12 +12,6 @@ def create_temperature_scaled_model(cfg: DictConfig) -> None:
     n_classes = cfg["train"]["n_classes"]
     pretrained = cfg["train"]["pretrained"]
     num_dataloader_workers = cfg["train"]["num_dataloader_workers"]
-    validation_frac = cfg["train"]["validation_frac"]
-    undersample = cfg["train"]["undersample"]
-    oversample = cfg["train"]["oversample"]
-    equal_undersampled_val = cfg["train"]["equal_undersampled_val"]
-    oversample_prop = cfg["train"]["oversample_prop"]
-    balanced_sampler = cfg["train"]["balanced_sampler"]
 
     experiment_id = cfg["evaluate"]["experiment_id"]
     model_id = cfg["evaluate"]["model_id"]
@@ -33,13 +27,10 @@ def create_temperature_scaled_model(cfg: DictConfig) -> None:
     temp_scaled_model_filename = experiment_dir / "model_with_temperature.pth"
 
     # Load the training and validation datasets.
-    dataset_train, dataset_valid, dataset_classes = get_datasets(cfg, pretrained, image_resize, validation_frac,
-                                                                 oversample=oversample, undersample=undersample,
-                                                                 oversample_prop=oversample_prop,
-                                                                 equal_undersampled_val=equal_undersampled_val,
-                                                                 include_metadata=use_metadata)
+    dataset_train, dataset_valid = get_datasets(cfg, pretrained, image_resize, stage="train", dataset="closed",
+                                                include_metadata=use_metadata)
     _, valid_loader = get_data_loaders(dataset_train, dataset_valid, batch_size, num_dataloader_workers,
-                                       balanced_sampler=balanced_sampler)
+                                       balanced_sampler=False)  # only applies to train loader
 
     model = load_model_for_inference(device, experiment_dir, model_id, n_classes)
     temp_scaled_model = ModelWithTemperature(model)

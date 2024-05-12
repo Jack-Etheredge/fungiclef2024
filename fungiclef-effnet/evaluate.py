@@ -397,6 +397,6 @@ if __name__ == "__main__":
                         from_outputs=outputs_precomputed)
 
     print("training openGAN model")
-    train_and_select_discriminator(cfg, cache_embeddings=True)
+    train_and_select_discriminator(cfg)
     print(f"evaluating experiment {experiment_id} with openGAN")
     evaluate_experiment(cfg=cfg, experiment_id=experiment_id, opengan=True, from_outputs=outputs_precomputed)

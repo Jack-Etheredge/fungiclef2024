@@ -8,7 +8,6 @@ https://pytorch.org/vision/stable/transforms.html#v1-or-v2-which-one-should-i-us
 import math
 import os
 import re
-from collections import Counter
 from math import radians, cos, sin, pi
 from pathlib import Path
 
@@ -16,11 +15,8 @@ import numpy as np
 import pandas as pd
 import torch
 from PIL import Image, ImageFile
-from imblearn.over_sampling import RandomOverSampler
-from imblearn.under_sampling import RandomUnderSampler
-from sklearn.model_selection import train_test_split
 from torchvision.transforms import v2
-from torch.utils.data import DataLoader, Dataset, Subset, ConcatDataset
+from torch.utils.data import DataLoader, Dataset, ConcatDataset
 from torchvision.transforms.v2 import InterpolationMode
 
 from augmentations import Grid
@@ -42,9 +38,6 @@ Substrate = [
     'living stems of herbs, grass etc', 'leaf or needle litter',
     'siliceous stone', 'mosses', 'bark of living trees', 'insects', 'spiders', 'living flowers', 'catkins', 'lichens',
     'soil', 'liverworts', 'peat mosses', 'cones', 'fire spot',
-    # new ones:
-    # 'šišky', 'mechorosty', 'půda', 'kůra živých stromů', 'houby', 'odumřelé dřevo (včetně kůry)',
-    # 'dřevní štěpka nebo mulč', 'listí nebo jehličí', 'dřevo a kořeny živých stromů',
 ]  # contains nan
 
 Habitat = [
@@ -54,10 +47,6 @@ Habitat = [
     'coniferous woodland/plantation', 'Forest bog', 'Mixed woodland (with coniferous and deciduous trees)',
     'lawn', 'salt meadow', 'Willow scrubland', 'improved grassland', 'rock', 'garden', 'Thorny scrubland',
     'other habitat', 'fallow field', 'masonry', 'roadside', 'hedgerow', 'meadow', 'roof',
-    # new ones:
-    # 'zahrada', 'louka/trávník', 'listnatý les', 'park/hřbitov', 'louka', 'jehličnatý les s přirozeným charakterem',
-    # 'lesní rašeliniště', 'krajnice', 'trávník', 'acidofilní / kyselá doubrava', 'listnatý les s přirozeným charakterem',
-    # 'smíšený les', 'pole', 'příkop', 'jehličnatý les / monokultura', 'živý plot',
 
 ]  # contains nan
 
@@ -96,7 +85,7 @@ def get_train_transform(cfg, image_size, pretrained):
 
     if cfg["train_aug"]["gridmask_prob"] is not None and cfg["train_aug"]["gridmask_prob"] > 0.0:
         train_augs.append(Grid(360, 0, cfg["train_aug"]["gridmask_prob"]))
-    
+
     if cfg["train_aug"]["random_erasing_prob"] is not None and cfg["train_aug"]["random_erasing_prob"] > 0.0:
         train_augs.append(v2.RandomErasing(cfg["train_aug"]["random_erasing_prob"]))
 
@@ -134,134 +123,54 @@ def normalize_transform(pretrained):
     return normalize
 
 
-def get_datasets(cfg, pretrained, image_size, validation_frac, oversample=False, undersample=False,
-                 oversample_prop=0.1, equal_undersampled_val=True, seed=42, include_metadata=False, training_augs=True):
+def get_datasets(cfg, pretrained, image_size, stage="train", dataset="closed", include_metadata=False,
+                 training_augs=True):
     """
     Function to prepare the Datasets.
     :param pretrained: Boolean, True or False.
-    Returns the training and validation datasets along
-    with the class names.
+    :return train_dataset, val_dataset: Training and validation Datasets for the Dataloaders.
     """
 
-    if cfg["train"]["new_data_split"]:
-        print("using new data split. ignoring other variables such as `equal_undersampled_val` and `undersample`.")
+    valid_datasets = {"open", "closed", "openclosed"}
+    if dataset not in valid_datasets:
+        raise ValueError(f"dataset option {dataset} not in valid options: open, closed, openclosed")
 
-        train_20 = CustomImageDataset(
-            label_file_path=METADATA_DIR / "FungiCLEF2023_train_metadata_PRODUCTION.csv",
-            img_dir=DATA_DIR / "DF20",
-            transform=((get_train_transform(cfg, image_size, pretrained)) if training_augs else
-                       (get_valid_transform(image_size, pretrained))),  # this is the difference
-            include_metadata=include_metadata,
-        )
-        train_21 = CustomImageDataset(
-            label_file_path=METADATA_DIR / "FungiCLEF2023_val_metadata_PRODUCTION.csv",
-            img_dir=DATA_DIR / "DF21",
-            transform=((get_train_transform(cfg, image_size, pretrained)) if training_augs else
-                       (get_valid_transform(image_size, pretrained))),  # this is the difference
-            include_metadata=include_metadata,
-            exclude={-1},
-        )
-        val_20 = CustomImageDataset(
-            label_file_path=METADATA_DIR / "FungiCLEF2023_train_metadata_PRODUCTION.csv",
-            img_dir=DATA_DIR / "DF20",
-            transform=(get_valid_transform(image_size, pretrained)),  # only difference
-            include_metadata=include_metadata,
-        )
-        val_21 = CustomImageDataset(
-            label_file_path=METADATA_DIR / "FungiCLEF2023_val_metadata_PRODUCTION.csv",
-            img_dir=DATA_DIR / "DF21",
-            transform=(get_valid_transform(image_size, pretrained)),  # only difference
-            include_metadata=include_metadata,
-            exclude={-1},
-        )
-        total_train = ConcatDataset([train_20, train_21])
-        total_val = ConcatDataset([val_20, val_21])
-        total_train.target = np.array([list(train_20.target) + list(train_21.target)]).squeeze()
-        total_val.target = np.array([list(train_20.target) + list(train_21.target)]).squeeze()
+    # this could be cleaner as a dictionary
+    if stage == "train" or stage == "fixres_fine_tune":
+        stage_id = "train"
+    elif stage == "val_fine_tune":
+        stage_id = "val_fine_tune"
+    else:
+        raise ValueError(f"stage {stage} not recognized for datasets")
 
-        # get the indices for the train and val datasets where val is max(10% total samples, 3)
-        train_indices = []
-        val_indices = []
-        for cls in np.unique(val_20.target):
-            cls_count = sum(total_train.target == cls)
-            # cls_count = sum(train_21.target == cls)  # take 10% from DF21, not 10% total
-            n_val_samples = max(int(0.1 * cls_count), 3)
-            all_indices = np.where(total_train.target == cls)[0]
-            val_indices.extend(all_indices[-n_val_samples:])
-            train_indices.extend(all_indices[:-n_val_samples])
+    train_metadata = f"{stage_id}_split_{dataset}_train.csv"
+    val_metadata = f"{stage_id}_split_{dataset}_val.csv"
 
-        # # data integrity checks
-        # # assert no overlap
-        # assert len(train_indices) + len(val_indices) == len(total_train)
-        # # assert val has at least 3 samples per class
-        # val_counts = Counter(total_train.target[val_indices].tolist())
-        # assert all([v >= 3 for v in val_counts.values()])
-        # # assert train is 90% of each class except for classes for which val has 3 samples
-        # train_counts = Counter(total_train.target[train_indices].tolist())
-        # for k, v in train_counts.items():
-        #     if val_counts[k] == 3:
-        #         assert train_counts[k] > 3
-        #         continue
-        #     assert v >= 0.9 * (val_counts[k] + v)
+    print(f"stage {stage}, dataset {dataset}: using {train_metadata} and {val_metadata} for dataset definitions")
 
-        train_dataset = Subset(total_train, indices=train_indices)
-        train_dataset.target = total_train.target[train_indices]
-        val_dataset = Subset(total_val, indices=val_indices)
-        val_dataset.target = total_val.target[val_indices]
-        return train_dataset, val_dataset, train_20.classes
+    if stage == "fixres_fine_tune":
+        training_augs = False
+        print(f"setting training_augs to False for stage {stage}")
 
-    dataset = CustomImageDataset(
-        label_file_path=METADATA_DIR / "FungiCLEF2023_train_metadata_PRODUCTION.csv",
-        img_dir=DATA_DIR / "DF20",
+    train_dataset = CustomImageDataset(
+        label_file_path=METADATA_DIR / train_metadata,
+        img_dir=DATA_DIR,
         transform=((get_train_transform(cfg, image_size, pretrained)) if training_augs else
-                   (get_valid_transform(image_size, pretrained))),  # this is the difference
+                   (get_valid_transform(image_size, pretrained))),
         include_metadata=include_metadata,
     )
     val_dataset = CustomImageDataset(
-        label_file_path=METADATA_DIR / "FungiCLEF2023_train_metadata_PRODUCTION.csv",
-        img_dir=DATA_DIR / "DF20",
-        transform=(get_valid_transform(image_size, pretrained)),  # only difference
+        label_file_path=METADATA_DIR / val_metadata,
+        img_dir=DATA_DIR,
+        transform=(get_valid_transform(image_size, pretrained)),
         include_metadata=include_metadata,
     )
-    targets = dataset.target
 
-    if equal_undersampled_val:
-        # get 4 samples per class for validation
-        sample_dict = Counter(targets)
-        sample_dict = {k: 4 for k in sample_dict.keys()}
-        under = RandomUnderSampler(sampling_strategy=sample_dict, random_state=seed)
-        all_indices = np.array(list(np.arange(targets.shape[0])))
-        test_indices, _ = under.fit_resample(all_indices.reshape(-1, 1), targets)
-        test_indices = test_indices.squeeze()
-        train_indices = np.delete(all_indices, test_indices)
-    else:
-        train_indices, test_indices = train_test_split(np.arange(targets.shape[0]), stratify=targets,
-                                                       test_size=validation_frac, random_state=seed)
-
-    if undersample:
-        under = RandomUnderSampler(random_state=seed)
-        if oversample:
-            sample_dict = Counter(targets)
-            majority = max(sample_dict.values())
-            sample_dict = {k: max(v, int(majority * oversample_prop)) for k, v in sample_dict.items()}
-            over = RandomOverSampler(sampling_strategy=sample_dict, random_state=seed)
-            train_indices, _ = over.fit_resample(train_indices.reshape(-1, 1), targets[train_indices])
-            train_indices = train_indices.squeeze()
-            print(train_indices.shape)
-        train_indices, _ = under.fit_resample(train_indices.reshape(-1, 1), targets[train_indices])
-        train_indices = train_indices.squeeze()
-
-    train_dataset = Subset(dataset, indices=train_indices)
-    train_dataset.target = targets[train_indices]
-    val_dataset = Subset(val_dataset, indices=test_indices)
-    val_dataset.target = targets[test_indices]
-    return train_dataset, val_dataset, dataset.classes
+    return train_dataset, val_dataset
 
 
 class CustomImageDataset(Dataset):
     def __init__(self, label_file_path: str, img_dir: str,
-                 keep_only: set | None = None,
-                 exclude: set | None = None,
                  transform=None,
                  target_transform=None,
                  include_metadata=False,
@@ -275,11 +184,11 @@ class CustomImageDataset(Dataset):
         self.include_metadata = include_metadata
         self.metadata_from_cache = metadata_from_cache
         self.img_dir = img_dir
-        self._setup_from_df(exclude, keep_only, label_file_path)
+        self._setup_from_df(label_file_path)
         self.transform = transform
         self.target_transform = target_transform
 
-    def _setup_from_df(self, exclude, keep_only, label_file_path):
+    def _setup_from_df(self, label_file_path):
         df = pd.read_csv(label_file_path, dtype={"class_id": "int64"})
 
         if self.include_metadata:
@@ -307,10 +216,6 @@ class CustomImageDataset(Dataset):
 
         df = df[["image_path", "class_id"]]
 
-        if keep_only is not None:
-            df = df[df["class_id"].isin(keep_only)]
-        if exclude is not None:
-            df = df[~df["class_id"].isin(exclude)]
         self.classes = df["class_id"].unique()
         self.target = df["class_id"].values
         self.image_filenames = df["image_path"].values
@@ -420,8 +325,7 @@ def get_data_loaders(train_dataset, val_dataset, batch_size, num_workers, balanc
     return train_loader, valid_loader
 
 
-def get_openset_datasets(cfg, pretrained, image_size, n_train=2000, n_val=200, seed=42, training_augs=True,
-                         include_metadata=False):
+def get_openset_datasets(cfg, pretrained, image_size, training_augs=True, include_metadata=False):
     """
     Function to prepare the Datasets.
     :param pretrained: Boolean, True or False.
@@ -430,54 +334,11 @@ def get_openset_datasets(cfg, pretrained, image_size, n_train=2000, n_val=200, s
     Returns the training, validation, and test sets for the openset dataset.
     """
 
-    # set up the dataset twice but with different transformations
-    train_dataset = CustomImageDataset(
-        label_file_path=METADATA_DIR / "FungiCLEF2023_val_metadata_PRODUCTION.csv",
-        img_dir=DATA_DIR / "DF21",
-        keep_only={-1},
-        transform=((get_train_transform(cfg, image_size, pretrained)) if training_augs else
-                   (get_valid_transform(image_size, pretrained))),  # this is the difference
-        include_metadata=include_metadata
-    )
-    val_test_dataset = CustomImageDataset(
-        label_file_path=METADATA_DIR / "FungiCLEF2023_val_metadata_PRODUCTION.csv",
-        img_dir=DATA_DIR / "DF21",
-        keep_only={-1},
-        transform=(get_valid_transform(image_size, pretrained)),  # this is the difference
-        include_metadata=include_metadata
-    )
+    train_dataset, val_dataset = get_datasets(cfg, pretrained, image_size, stage="train",
+                                              dataset="open", include_metadata=include_metadata,
+                                              training_augs=training_augs)
 
-    indices = list(range(train_dataset.target.shape[0]))
-    test_indices, train_indices = train_test_split(indices, test_size=n_train, random_state=seed)
-    test_indices, val_indices = train_test_split(test_indices, test_size=n_val, random_state=seed)
-
-    train_dataset = Subset(train_dataset, indices=train_indices)
-    val_dataset = Subset(val_test_dataset, indices=val_indices)
-    test_dataset = Subset(val_test_dataset, indices=test_indices)
-    train_dataset.target = np.array([-1] * len(train_dataset))
-    val_dataset.target = np.array([-1] * len(val_dataset))
-    test_dataset.target = np.array([-1] * len(test_dataset))
-
-    return train_dataset, val_dataset, test_dataset
-
-
-def get_closedset_test_dataset(pretrained, image_size, include_metadata=False):
-    """
-    Function to prepare the Datasets.
-    :param pretrained: Boolean, True or False.
-    Returns the training, validation, and test sets for the openset dataset.
-    """
-
-    # drop the unknown label
-    val_test_dataset = CustomImageDataset(
-        label_file_path=METADATA_DIR / "FungiCLEF2023_val_metadata_PRODUCTION.csv",
-        img_dir=DATA_DIR / "DF21",
-        exclude={-1},
-        transform=(get_valid_transform(image_size, pretrained)),
-        include_metadata=include_metadata
-    )
-
-    return val_test_dataset
+    return train_dataset, val_dataset
 
 
 def get_dataloader_combine_and_balance_datasets(dataset_1, dataset_2, batch_size, num_workers=16,
@@ -503,46 +364,6 @@ def get_dataloader_combine_and_balance_datasets(dataset_1, dataset_2, batch_size
                             persistent_workers=persistent_workers,
                             )
     return dataloader
-
-
-# the imagefolder dataset will sort by class then filename, so for data splitting purposes, we can sort the
-# image_path per class and get back the order in the dataset
-# full_dataset = ImageFolder(root=DATA_FROM_FOLDER_DIR)
-# def get_openset_datasets(pretrained, image_size, n_train=2000, n_val=200, seed=42):
-#     """
-#     Function to prepare the Datasets.
-#     :param pretrained: Boolean, True or False.
-#     Returns the training, validation, and test sets for the openset dataset.
-#     """
-#
-#     # TODO: revisit the idea of training transformations for the open set discriminator training
-#
-#     # set up the dataset twice but with different transformations
-#     train_dataset = CustomImageDataset(
-#         label_file_path=METADATA_DIR / "FungiCLEF2023_val_metadata_PRODUCTION.csv",
-#         img_dir=DATA_DIR / "DF21",
-#         keep_only={-1},
-#         transform=(get_train_transform(image_size, pretrained))
-#     )
-#     val_test_dataset = CustomImageDataset(
-#         label_file_path=METADATA_DIR / "FungiCLEF2023_val_metadata_PRODUCTION.csv",
-#         img_dir=DATA_DIR / "DF21",
-#         keep_only={-1},
-#         transform=(get_valid_transform(image_size, pretrained))  # this is the difference
-#     )
-#
-#     indices = list(range(train_dataset.target.shape[0]))
-#     test_indices, train_indices = train_test_split(indices, test_size=n_train, random_state=seed)
-#     test_indices, val_indices = train_test_split(test_indices, test_size=n_val, random_state=seed)
-#
-#     train_dataset = Subset(train_dataset, indices=train_indices)
-#     val_dataset = Subset(val_test_dataset, indices=val_indices)
-#     test_dataset = Subset(val_test_dataset, indices=test_indices)
-#     train_dataset.target = np.array([-1] * len(train_dataset))
-#     val_dataset.target = np.array([-1] * len(val_dataset))
-#     test_dataset.target = np.array([-1] * len(test_dataset))
-#
-#     return train_dataset, val_dataset, test_dataset
 
 
 def get_spatial_info(latitude, longitude):
@@ -639,14 +460,3 @@ def encode_onehot(attr, attr_list, additional_unknown_idx=False):
                 pass
 
     return code
-
-
-def fungi_collate_fn(batch):
-    batch = list(filter(lambda x: x is not None, batch))
-    imgs, targets, genus_targets, auxs, img_names = zip(*batch)
-    imgs = torch.stack(imgs, 0)
-    targets = torch.tensor(targets, dtype=torch.int64)
-    genus_targets = torch.tensor(genus_targets, dtype=torch.int64)
-    auxs = [torch.tensor(aux, dtype=torch.float64) for aux in auxs]
-    auxs = torch.stack(auxs, dim=0)
-    return imgs, targets, genus_targets, auxs, img_names

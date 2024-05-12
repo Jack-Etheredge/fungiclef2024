@@ -11,7 +11,7 @@ from tqdm import tqdm
 
 from paths import CHECKPOINT_DIR, EMBEDDINGS_DIR
 from datasets import collate_fn, get_openset_datasets, get_datasets
-from closedset_model import build_model, load_model_for_inference
+from closedset_model import load_model_for_inference
 from utils import get_model_features
 
 
@@ -65,18 +65,14 @@ def create_embeddings(cfg: DictConfig) -> None:
     if closedset_oversample_rate == 1 and openset_oversample_rate == 1:
         training_augs = False
         print("no oversampling of either closed set or open set data, so disabling training data augmentations.")
-    openset_dataset_train, _, _ = get_openset_datasets(cfg, pretrained=pretrained, image_size=image_size,
-                                                       n_train=openset_n_train, n_val=openset_n_val,
-                                                       include_metadata=use_metadata, training_augs=training_augs)
+    openset_dataset_train, _ = get_openset_datasets(cfg, pretrained=pretrained, image_size=image_size,
+                                                    include_metadata=use_metadata, training_augs=training_augs)
     openset_loader = torch.utils.data.DataLoader(openset_dataset_train, batch_size=batch_size,
                                                  shuffle=False, num_workers=n_workers, collate_fn=collate_fn,
                                                  timeout=worker_timeout_s)
-    closedset_dataset, _, _ = get_datasets(cfg, pretrained=pretrained, image_size=image_size,
-                                           validation_frac=validation_frac,
-                                           oversample=oversample, undersample=undersample,
-                                           oversample_prop=oversample_prop,
-                                           equal_undersampled_val=equal_undersampled_val,
-                                           include_metadata=use_metadata, training_augs=training_augs)
+    closedset_dataset, _ = get_datasets(cfg, pretrained=pretrained, image_size=image_size,
+                                        stage="train", dataset="closed",
+                                        include_metadata=use_metadata, training_augs=training_augs)
     if closedset_n_train is not None:
         closedset_dataset = Subset(closedset_dataset,
                                    np.random.choice(closedset_dataset.target.shape[0], closedset_n_train,

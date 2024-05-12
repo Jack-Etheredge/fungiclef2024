@@ -17,7 +17,7 @@ from paths import CHECKPOINT_DIR
 from tqdm import tqdm
 
 from closedset_model import get_embedding_size, load_model_for_inference
-from datasets import get_openset_datasets, get_datasets, get_closedset_test_dataset, collate_fn
+from datasets import get_openset_datasets, get_datasets, collate_fn
 # from openset_recognition_models import Discriminator
 from openset_recognition_models import LayerNormDiscriminator as Discriminator
 from utils import get_model_features
@@ -94,32 +94,17 @@ def choose_best_discriminator(cfg: DictConfig, project_name=None) -> Path:
     #     v2.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))
     # ])
 
-    _, openset_dataset_val, openset_dataset_test = get_openset_datasets(cfg, pretrained=pretrained,
-                                                                        image_size=image_size,
-                                                                        n_train=openset_n_train, n_val=openset_n_val,
-                                                                        include_metadata=use_metadata)
+    _, openset_dataset_val = get_openset_datasets(cfg, pretrained=pretrained, image_size=image_size,
+                                                  include_metadata=use_metadata)
     open_set_selection_loader = torch.utils.data.DataLoader(openset_dataset_val, batch_size=batch_size,
                                                             shuffle=False, num_workers=4, collate_fn=collate_fn,
                                                             timeout=worker_timeout_s)
-    open_set_evaluation_loader = torch.utils.data.DataLoader(openset_dataset_test, batch_size=batch_size,
-                                                             shuffle=False, num_workers=4,
-                                                             collate_fn=collate_fn,
-                                                             timeout=worker_timeout_s)
-    _, closedset_dataset_val, _ = get_datasets(cfg, pretrained=pretrained, image_size=image_size,
-                                               validation_frac=validation_frac,
-                                               oversample=oversample, undersample=undersample,
-                                               oversample_prop=oversample_prop,
-                                               equal_undersampled_val=equal_undersampled_val,
-                                               include_metadata=use_metadata)
+    _, closedset_dataset_val = get_datasets(cfg, pretrained=pretrained, image_size=image_size,
+                                            stage="train", dataset="closed", include_metadata=use_metadata)
     closed_set_selection_loader = torch.utils.data.DataLoader(closedset_dataset_val, batch_size=batch_size,
                                                               shuffle=False, num_workers=4,
                                                               collate_fn=collate_fn,
                                                               timeout=worker_timeout_s)
-    closedset_dataset_test = get_closedset_test_dataset(pretrained, image_size, use_metadata)
-    closed_set_evaluation_loader = torch.utils.data.DataLoader(closedset_dataset_test, batch_size=batch_size,
-                                                               shuffle=False, num_workers=4,
-                                                               collate_fn=collate_fn,
-                                                               timeout=worker_timeout_s)
 
     # generate embeddings and labels to select the model
     embeddings = []
@@ -178,50 +163,8 @@ def choose_best_discriminator(cfg: DictConfig, project_name=None) -> Path:
     # print(f"best discriminator: {best_discriminator_path} with selection roc-auc {best_rocauc}")
     print(f"best discriminator: {best_discriminator_path} with selection macro f1 {best_f1} and roc-auc {rocauc}")
 
-    # generate embeddings and labels to evaluate the model
-    embeddings = []
-    labels = []
-    print("generate closed set embeddings and labels to evaluate the model on test set")
-    for data in tqdm(closed_set_evaluation_loader):
-        images, _ = data
-        # squeeze to use MLP instead of CNN
-        outputs = get_model_features(images, model, device).detach().cpu().numpy().squeeze()
-        embeddings.append(outputs)
-        labels.extend([closedset_label] * outputs.shape[0])
-    print("generate open set embeddings and labels to evaluate the model on test set")
-    for data in tqdm(open_set_evaluation_loader):
-        images, _ = data
-        # squeeze to use MLP instead of CNN
-        outputs = get_model_features(images, model, device).detach().cpu().numpy().squeeze()
-        embeddings.append(outputs)
-        labels.extend([openset_label] * outputs.shape[0])
-    embeddings = np.concatenate(embeddings)
-    embeddings = torch.tensor(embeddings).to(device)
-
-    # evaluate selected model
-    print("evaluating model on open dataset")
-    preds = []
-    with torch.no_grad():
-        for embedding in tqdm(embeddings):
-            y_pred_proba = best_discriminator_model(embedding.unsqueeze(0)).detach().cpu().numpy()
-            preds.append(y_pred_proba)
-    preds = np.array(preds).squeeze()
-
-    # evaluate roc-auc
-    eval_rocauc = roc_auc_score(labels, preds)
-    eval_f1 = f1_score(labels, (preds > 0.5).astype(int), average='macro')
-    print((f"best discriminator: {best_discriminator_path} "
-           f"with selection f1 macro {best_f1} "
-           f"and evaluation f1 macro {eval_f1} "
-           f"and evaluation roc-auc {eval_rocauc}"))
-
     print("saving best discriminator to the embedder model directory")
     torch.save(best_discriminator_model.state_dict(), experiment_dir / "openganfea_model.pth")
-
-
-# def create_feature_extractor_from_model(model, embedder_layer_offset):
-#     feature_extractor = torch.nn.Sequential(*list(model.children())[:embedder_layer_offset])
-#     return feature_extractor
 
 
 if __name__ == "__main__":

@@ -21,10 +21,9 @@ from omegaconf import DictConfig, OmegaConf
 
 from paths import CHECKPOINT_DIR
 from closedset_model import build_model, unfreeze_model
-from datasets import get_datasets, get_data_loaders, get_dataloader_combine_and_balance_datasets, get_openset_datasets
-from evaluate import evaluate_experiment
+from datasets import get_datasets, get_data_loaders
 from utils import copy_config, save_plots, checkpoint_model, get_model_preds
-from losses import SeesawLoss, SupConLoss, CompositeLoss
+from losses import SeesawLoss, CompositeLoss
 
 
 def add_weight_decay(model, weight_decay=1e-5, skip_list=()):
@@ -351,48 +350,25 @@ def update_optimizer_lr_finder(criterion, device, model, optimizer, train_loader
 
 def create_train_val_loaders(cfg):
     tcfg = cfg["train"]
-    osrcfg = cfg["open-set-recognition"]
-
-    # Load the training and validation datasets.
-    closed_dataset_train, closed_dataset_val, _ = get_datasets(cfg, tcfg["pretrained"], tcfg["image_resize"],
-                                                               tcfg["validation_frac"],
-                                                               oversample=tcfg["oversample"],
-                                                               undersample=tcfg["undersample"],
-                                                               oversample_prop=tcfg["oversample_prop"],
-                                                               equal_undersampled_val=tcfg[
-                                                                   "equal_undersampled_val"],
-                                                               include_metadata=tcfg[
-                                                                   "use_metadata"])
 
     if tcfg["include_unknowns"]:
-        open_dataset_train, open_dataset_val, _ = get_openset_datasets(cfg, pretrained=tcfg["pretrained"],
-                                                                       image_size=tcfg["image_resize"],
-                                                                       n_train=osrcfg["openset_n_train"],
-                                                                       n_val=osrcfg["openset_n_val"],
-                                                                       training_augs=True,
-                                                                       include_metadata=tcfg[
-                                                                           "use_metadata"])
-        print("[[train]] combining dataloaders and balancing classes")
-        train_loader = get_dataloader_combine_and_balance_datasets(closed_dataset_train, open_dataset_train,
-                                                                   batch_size=tcfg["batch_size"], unknowns=True,
-                                                                   timeout=tcfg["worker_timeout_s"])
-        print("[[val]] combining dataloaders and balancing classes")
-        val_loader = get_dataloader_combine_and_balance_datasets(closed_dataset_val, open_dataset_val,
-                                                                 batch_size=tcfg["batch_size"], unknowns=True,
-                                                                 timeout=tcfg["worker_timeout_s"])
-
-        print(f"Number of closed set training images: {len(closed_dataset_train)}")
-        print(f"Number of closed set validation images: {len(closed_dataset_val)}")
-        print(f"Number of open set training images: {len(open_dataset_train)}")
-        print(f"Number of open set validation images: {len(open_dataset_val)}")
+        dataset = "openclosed"
     else:
-        # Load the training and validation data loaders.
-        train_loader, val_loader = get_data_loaders(closed_dataset_train, closed_dataset_val, tcfg["batch_size"],
-                                                    tcfg["num_dataloader_workers"],
-                                                    balanced_sampler=tcfg["balanced_sampler"],
-                                                    timeout=tcfg["worker_timeout_s"])
-        print(f"Number of training images: {len(closed_dataset_train)}")
-        print(f"Number of validation images: {len(closed_dataset_val)}")
+        dataset = "closed"
+
+    train_dataset, val_dataset = get_datasets(cfg, tcfg["pretrained"], tcfg["image_resize"],
+                                              stage=tcfg["stage"],
+                                              dataset=dataset,
+                                              include_metadata=tcfg[
+                                                  "use_metadata"])
+    # Load the training and validation data loaders.
+    train_loader, val_loader = get_data_loaders(train_dataset, val_dataset, tcfg["batch_size"],
+                                                tcfg["num_dataloader_workers"],
+                                                balanced_sampler=tcfg["balanced_sampler"],
+                                                timeout=tcfg["worker_timeout_s"])
+    print(f"Number of training images: {len(train_dataset)}")
+    print(f"Number of validation images: {len(val_dataset)}")
+
     return train_loader, val_loader
 
 
