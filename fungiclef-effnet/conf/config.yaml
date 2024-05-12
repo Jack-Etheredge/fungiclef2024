@@ -1,37 +1,44 @@
 # reference: https://hydra.cc/docs/tutorials/basic/your_first_app/using_config/
 train:
-  experiment_id: null
-  model_id: "tf_efficientnetv2_s.in21k"  # "MetaFG_meta_0"
+  experiment_id: "2024-05-11-metaformer_2"
+  model_id: "MetaFG_meta_2"
+  # "timm/caformer_s36.sail_in22k_ft_in1k_384"  # "tf_efficientnetv2_s.in21k"  # "MetaFG_meta_0"
+  use_metadata: True  # check me
   epochs: 200
   lr: 1e-3  # found with lr finder, stepping down by 1/10 after loader failure
-  lr_after_unfreeze: 1e-5
-  use_lr_finder: True  # incompatible with multi-input or multi-output models without modification
+  lr_after_unfreeze: 5e-5  # stepping down LR
+  use_lr_finder: False  # incompatible with multi-input or multi-output models without modification
   pretrained: True
   early_stop_thresh: 10
+  new_data_split: True  # check me
   loss_function: "seesaw"
   use_poison_loss: True  # check me
   use_logitnorm: True  # check me
   include_unknowns: False  # check me
-  batch_size: 64  # 128 works for up to tf_efficientnetv2_s.in21k
+  batch_size: 32  # 32 for metaformer_0  # 128@224, 64@300 for tf_efficientnetv2_s.in21k
   num_dataloader_workers: 12
   worker_timeout_s: 360
-  image_resize: 300  # 224 for efficientnet_b0, 128-300+ efficientnet_v2s; 336 for eva-02
+  image_resize: 384  # 224 for efficientnet_b0, 128-300+ efficientnet_v2s; 336 for eva-02
   validation_frac: 0.1
   max_norm: 1.0
   undersample: False
   oversample: False
   equal_undersampled_val: True
   oversample_prop: 0.1
-  dropout_rate: 0.2
-  weight_decay: 1e-2  # 0.05 for metaformer  # originally 1e-2 for eva-02
+  dropout_rate: 0.2  # 0.2 for both metaformer_0 and efficientnetv2_s
+  weight_decay: 0.05 # 1e-2 for efficientnetv2_s  # 0.05 for metaformer  # originally 1e-2 for eva-02
   balanced_sampler: False
   fine_tune_after_n_epochs: 5
-  skip_frozen_epochs_load_failed_model: True  # check me
   notes: trivial aug, double resize before randomcrop # check me
   n_classes: 1604
   lr_scheduler: "reducelronplateau"
   lr_scheduler_patience: 4
-  use_metadata: False
+train_aug:
+  trivial_aug: True
+  auto_aug: False
+  random_aug: False
+  gridmask_prob: 0.2  # check me (works well for efficientnet but not metaformer for some reason)
+  random_erasing_prob: 0.0  # check me
 progressive-learning:
   start_image_size: 384
   end_image_size: 384
@@ -62,13 +69,13 @@ open-set-recognition:
   openset_label: 1
   closedset_label: 0
 evaluate:
-  experiment_id: "2024-05-02 17:59:17.835619"
-  model_id: "tf_efficientnetv2_s.in21k"  # "MetaFG_meta_0"
+  experiment_id: "2024-05-05 00:15:57.933872"
+  model_id: "tf_efficientnetv2_s.in21k"  # "tf_efficientnetv2_s.in21k"  # "MetaFG_meta_0"
   use_metadata: False
-  image_size: 300
-  batch_size: 32
+  image_size: 600
+  batch_size: 64
 
-  #  experiment_id: "2024-04-28 23:56:00.910245"  # "2024-04-28 23:56:00.910245" (metaformer)  # "2024-04-26 13:31:54.470604" (efficientnetv2_s)
+  #  experiment_id: "2024-04-21 16:36:56.707436"  # "2024-04-28 23:56:00.910245" (metaformer)  # "2024-04-26 13:31:54.470604" (efficientnetv2_s)
   #  model_id: "MetaFG_meta_0"  # "MetaFG_meta_0"  # "tf_efficientnetv2_s.in21k"
   #  use_metadata: True
   #  image_size: 384

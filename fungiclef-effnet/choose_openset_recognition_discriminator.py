@@ -94,7 +94,8 @@ def choose_best_discriminator(cfg: DictConfig, project_name=None) -> Path:
     #     v2.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))
     # ])
 
-    _, openset_dataset_val, openset_dataset_test = get_openset_datasets(pretrained=pretrained, image_size=image_size,
+    _, openset_dataset_val, openset_dataset_test = get_openset_datasets(cfg, pretrained=pretrained,
+                                                                        image_size=image_size,
                                                                         n_train=openset_n_train, n_val=openset_n_val,
                                                                         include_metadata=use_metadata)
     open_set_selection_loader = torch.utils.data.DataLoader(openset_dataset_val, batch_size=batch_size,
@@ -104,7 +105,7 @@ def choose_best_discriminator(cfg: DictConfig, project_name=None) -> Path:
                                                              shuffle=False, num_workers=4,
                                                              collate_fn=collate_fn,
                                                              timeout=worker_timeout_s)
-    _, closedset_dataset_val, _ = get_datasets(pretrained=pretrained, image_size=image_size,
+    _, closedset_dataset_val, _ = get_datasets(cfg, pretrained=pretrained, image_size=image_size,
                                                validation_frac=validation_frac,
                                                oversample=oversample, undersample=undersample,
                                                oversample_prop=oversample_prop,

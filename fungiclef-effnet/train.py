@@ -148,7 +148,6 @@ def train_model(cfg: DictConfig) -> None:
     balanced_sampler = cfg["train"]["balanced_sampler"]
     use_lr_finder = cfg["train"]["use_lr_finder"]
     fine_tune_after_n_epochs = cfg["train"]["fine_tune_after_n_epochs"]
-    skip_frozen_epochs_load_failed_model = cfg["train"]["skip_frozen_epochs_load_failed_model"]
     lr_scheduler = cfg["train"]["lr_scheduler"]
     lr_scheduler_patience = cfg["train"]["lr_scheduler_patience"]
     n_classes = cfg["train"]["n_classes"]
@@ -160,7 +159,7 @@ def train_model(cfg: DictConfig) -> None:
 
     experiment_id = cfg["train"]["experiment_id"]
     if experiment_id is None:
-        experiment_id = str(datetime.now())
+        experiment_id = str(datetime.now()).replace(" ", "-")
         cfg["train"]["experiment_id"] = experiment_id
 
     if balanced_sampler and (oversample or undersample):
@@ -186,38 +185,45 @@ def train_model(cfg: DictConfig) -> None:
     print(f"Learning rate: {lr}")
     print(f"Epochs to train for: {epochs}\n")
 
-    model = build_model(
-        model_id=model_id,
-        pretrained=pretrained,
-        fine_tune=not fine_tune_after_n_epochs or skip_frozen_epochs_load_failed_model,
-        num_classes=n_classes,
-        dropout_rate=dropout_rate,
-    ).to(device)
-
     # TODO: refine/replace this logic
     resume_from_checkpoint = model_file_path if Path(model_file_path).exists() else None
     if resume_from_checkpoint:
         print(f"resuming from checkpoint: {model_file_path}")
         # https://pytorch.org/tutorials/beginner/saving_loading_models.html
         checkpoint = torch.load(resume_from_checkpoint)
-        model.load_state_dict(checkpoint['model_state_dict'])
-        optimizer, scheduler = create_scheduler_and_optimizer(model, lr, weight_decay, lr_scheduler,
-                                                              lr_scheduler_patience)
+        best_validation_loss = checkpoint['validation_loss']
+        best_epoch = checkpoint['epoch']
         # Start epoch counter from the checkpoint epoch and set the validation loss so that the model checkpoint isn't
         #   automatically updated on the first epoch after resuming training.
         # There are edge cases where this behavior might not be desired such as fine-tuning with a different
         #   loss function and/or dataset such that the validation loss increases but still represents model improvement.
-        best_validation_loss = checkpoint['validation_loss']
-        best_epoch = checkpoint['epoch']
         start_epoch = best_epoch + 1
+        model = build_model(
+            model_id=model_id,
+            pretrained=pretrained,
+            fine_tune=not fine_tune_after_n_epochs or start_epoch >= fine_tune_after_n_epochs,
+            num_classes=n_classes,
+            dropout_rate=dropout_rate,
+        ).to(device)
+        model.load_state_dict(checkpoint['model_state_dict'])
+        optimizer, scheduler = create_scheduler_and_optimizer(model, lr, weight_decay, lr_scheduler,
+                                                              lr_scheduler_patience)
         try:
             optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-            optimizer.param_groups[0]["lr"] = lr
+            for group in optimizer.param_groups:
+                group["lr"] = lr
             print("loaded optimizer state but replaced lr")
         except Exception as e:
             print(f"unable to load optimizer state due to {e}")
         model.to(device)
     else:
+        model = build_model(
+            model_id=model_id,
+            pretrained=pretrained,
+            fine_tune=not fine_tune_after_n_epochs,
+            num_classes=n_classes,
+            dropout_rate=dropout_rate,
+        ).to(device)
         best_validation_loss = float("inf")
         best_epoch, start_epoch = 0, 0
         optimizer, scheduler = create_scheduler_and_optimizer(model, lr, weight_decay, lr_scheduler,
@@ -243,14 +249,7 @@ def train_model(cfg: DictConfig) -> None:
                               use_logitnorm=use_logitnorm)
 
     if use_lr_finder:
-        lr_finder = LRFinder(model, optimizer, criterion, device=device)
-        lr_finder.range_test(train_loader, start_lr=1e-6, end_lr=100, num_iter=100)
-        lr_finder.plot()  # to inspect the loss-learning rate graph
-        lr_finder.reset()  # to reset the model and optimizer to their initial state
-        min_grad_idx = (np.gradient(np.array(lr_finder.history["loss"]))).argmin()
-        lr = lr_finder.history["lr"][min_grad_idx]
-        print(f"Setting LR to {lr} according to LR finder.")
-        optimizer.param_groups[0]["lr"] = lr
+        optimizer, lr = update_optimizer_lr_finder(criterion, device, model, optimizer, train_loader)
 
     # Lists to keep track of losses and accuracies.
     train_loss, valid_loss = [], []
@@ -259,10 +258,17 @@ def train_model(cfg: DictConfig) -> None:
     unfrozen = fine_tune_after_n_epochs == 0
     for epoch in range(start_epoch, epochs):
 
-        if (not unfrozen and (skip_frozen_epochs_load_failed_model or
-                              epoch + 1 > fine_tune_after_n_epochs)):
+        if not unfrozen and epoch + 1 > fine_tune_after_n_epochs:
             model = unfreeze_model(model)
             print("all layers unfrozen")
+
+            if cfg["train"]["use_metadata"] or not use_lr_finder:
+                print("manually stepping down LR after unfreeze since LR finder is incompatible with multi-input model")
+                lr = cfg["train"]["lr_after_unfreeze"]
+            # if use_lr_finder:
+            #     print("finding new best LR after unfreezing weights")
+            #     optimizer, lr = update_optimizer_lr_finder(criterion, device, model, optimizer, train_loader)
+
             optimizer, scheduler = create_scheduler_and_optimizer(model, lr, weight_decay, lr_scheduler,
                                                                   lr_scheduler_patience)
             unfrozen = True
@@ -288,7 +294,7 @@ def train_model(cfg: DictConfig) -> None:
             try:
                 valid_epoch_loss, valid_epoch_acc = validate(model, val_loader,
                                                              criterion, device)
-                if scheduler:
+                if scheduler is not None:
                     scheduler.step(valid_epoch_loss)
                 recreate_loader = False
             except Exception as e:
@@ -323,9 +329,24 @@ def train_model(cfg: DictConfig) -> None:
                loss_plot_path=loss_plot_path)
     print('TRAINING COMPLETE')
 
-    print('evaluating')
-    evaluate_experiment(cfg, experiment_id)
-    print('EVALUATION COMPLETE')
+    # print('evaluating')
+    # evaluate_experiment(cfg, experiment_id)
+    # print('EVALUATION COMPLETE')
+
+
+def update_optimizer_lr_finder(criterion, device, model, optimizer, train_loader):
+    lr_finder = LRFinder(model, optimizer, criterion, device=device)
+    lr_finder.range_test(train_loader, start_lr=1e-9, end_lr=100, num_iter=100)
+    lr_finder.plot()  # to inspect the loss-learning rate graph
+    lr_finder.reset()  # to reset the model and optimizer to their initial state
+    lrs = lr_finder.history["lr"][10:-5]
+    losses = lr_finder.history["loss"][10:-5]
+    min_grad_idx = (np.gradient(np.array(losses))).argmin()
+    lr = lrs[min_grad_idx]
+    print(f"Setting LR to {lr} according to LR finder.")
+    for group in optimizer.param_groups:
+        group["lr"] = lr
+    return optimizer, lr
 
 
 def create_train_val_loaders(cfg):
@@ -333,7 +354,7 @@ def create_train_val_loaders(cfg):
     osrcfg = cfg["open-set-recognition"]
 
     # Load the training and validation datasets.
-    closed_dataset_train, closed_dataset_val, _ = get_datasets(tcfg["pretrained"], tcfg["image_resize"],
+    closed_dataset_train, closed_dataset_val, _ = get_datasets(cfg, tcfg["pretrained"], tcfg["image_resize"],
                                                                tcfg["validation_frac"],
                                                                oversample=tcfg["oversample"],
                                                                undersample=tcfg["undersample"],
@@ -344,7 +365,7 @@ def create_train_val_loaders(cfg):
                                                                    "use_metadata"])
 
     if tcfg["include_unknowns"]:
-        open_dataset_train, open_dataset_val, _ = get_openset_datasets(pretrained=tcfg["pretrained"],
+        open_dataset_train, open_dataset_val, _ = get_openset_datasets(cfg, pretrained=tcfg["pretrained"],
                                                                        image_size=tcfg["image_resize"],
                                                                        n_train=osrcfg["openset_n_train"],
                                                                        n_val=osrcfg["openset_n_val"],

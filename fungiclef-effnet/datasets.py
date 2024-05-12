@@ -23,6 +23,7 @@ from torchvision.transforms import v2
 from torch.utils.data import DataLoader, Dataset, Subset, ConcatDataset
 from torchvision.transforms.v2 import InterpolationMode
 
+from augmentations import Grid
 from paths import DATA_DIR, METADATA_DIR
 
 countryCode = [
@@ -60,8 +61,6 @@ Habitat = [
 
 ]  # contains nan
 
-IMG_EXTENSIONS = ['.png', '.jpg', '.jpeg']
-
 # dataset loading issue
 # https://github.com/eriklindernoren/PyTorch-YOLOv3/issues/162
 Image.MAX_IMAGE_PIXELS = None
@@ -70,27 +69,38 @@ WORKER_TIMEOUT_SECS = 120
 
 
 # Training transforms
-def get_train_transform(image_size, pretrained, max_image_size=300):
+def get_train_transform(cfg, image_size, pretrained):
     """
     training transformations
     : param image_size: Image size of resize when applying transforms.
     """
     # resize = max(image_size + 8, max_image_size)
-    resize = image_size * 2
-    train_transform = v2.Compose([
+    resize = max(384 * 2, image_size * 2)  # resized dataset to 768
+
+    train_augs = [
         v2.Resize(resize, interpolation=InterpolationMode.BICUBIC, antialias=True),
-        # v2.CenterCrop(224),
         v2.RandomCrop(image_size),
-        v2.TrivialAugmentWide(interpolation=InterpolationMode.BICUBIC),
-        # v2.AutoAugment(interpolation=InterpolationMode.BICUBIC),
-        # v2.RandomHorizontalFlip(p=0.5),
-        # v2.RandomApply([v2.GaussianBlur(kernel_size=(5, 9), sigma=(0.1, 5))], p=0.5),
-        # v2.RandomAdjustSharpness(sharpness_factor=2, p=0.5),
-        # v2.RandomAutocontrast(),
-        # v2.ToTensor(),
+    ]
+
+    if cfg["train_aug"]["trivial_aug"]:
+        train_augs.append(v2.TrivialAugmentWide(interpolation=InterpolationMode.BICUBIC))
+    elif cfg["train_aug"]["auto_aug"]:
+        train_augs.append(v2.AutoAugment(interpolation=InterpolationMode.BICUBIC))
+    elif cfg["train_aug"]["random_aug"]:
+        train_augs.append(v2.RandAugment(interpolation=InterpolationMode.BICUBIC))
+
+    train_augs.extend([
         v2.Compose([v2.ToImage(), v2.ToDtype(torch.float32, scale=True)]),
         normalize_transform(pretrained)
     ])
+
+    if cfg["train_aug"]["gridmask_prob"] is not None and cfg["train_aug"]["gridmask_prob"] > 0.0:
+        train_augs.append(Grid(360, 0, cfg["train_aug"]["gridmask_prob"]))
+    
+    if cfg["train_aug"]["random_erasing_prob"] is not None and cfg["train_aug"]["random_erasing_prob"] > 0.0:
+        train_augs.append(v2.RandomErasing(cfg["train_aug"]["random_erasing_prob"]))
+
+    train_transform = v2.Compose(train_augs)
     return train_transform
 
 
@@ -103,7 +113,6 @@ def get_valid_transform(image_size, pretrained):
     valid_transform = v2.Compose([
         v2.Resize(resize, interpolation=InterpolationMode.BICUBIC, antialias=True),
         v2.CenterCrop(image_size),
-        # v2.ToTensor(),
         v2.Compose([v2.ToImage(), v2.ToDtype(torch.float32, scale=True)]),
         normalize_transform(pretrained)
     ])
@@ -125,7 +134,7 @@ def normalize_transform(pretrained):
     return normalize
 
 
-def get_datasets(pretrained, image_size, validation_frac, oversample=False, undersample=False,
+def get_datasets(cfg, pretrained, image_size, validation_frac, oversample=False, undersample=False,
                  oversample_prop=0.1, equal_undersampled_val=True, seed=42, include_metadata=False, training_augs=True):
     """
     Function to prepare the Datasets.
@@ -134,10 +143,77 @@ def get_datasets(pretrained, image_size, validation_frac, oversample=False, unde
     with the class names.
     """
 
+    if cfg["train"]["new_data_split"]:
+        print("using new data split. ignoring other variables such as `equal_undersampled_val` and `undersample`.")
+
+        train_20 = CustomImageDataset(
+            label_file_path=METADATA_DIR / "FungiCLEF2023_train_metadata_PRODUCTION.csv",
+            img_dir=DATA_DIR / "DF20",
+            transform=((get_train_transform(cfg, image_size, pretrained)) if training_augs else
+                       (get_valid_transform(image_size, pretrained))),  # this is the difference
+            include_metadata=include_metadata,
+        )
+        train_21 = CustomImageDataset(
+            label_file_path=METADATA_DIR / "FungiCLEF2023_val_metadata_PRODUCTION.csv",
+            img_dir=DATA_DIR / "DF21",
+            transform=((get_train_transform(cfg, image_size, pretrained)) if training_augs else
+                       (get_valid_transform(image_size, pretrained))),  # this is the difference
+            include_metadata=include_metadata,
+            exclude={-1},
+        )
+        val_20 = CustomImageDataset(
+            label_file_path=METADATA_DIR / "FungiCLEF2023_train_metadata_PRODUCTION.csv",
+            img_dir=DATA_DIR / "DF20",
+            transform=(get_valid_transform(image_size, pretrained)),  # only difference
+            include_metadata=include_metadata,
+        )
+        val_21 = CustomImageDataset(
+            label_file_path=METADATA_DIR / "FungiCLEF2023_val_metadata_PRODUCTION.csv",
+            img_dir=DATA_DIR / "DF21",
+            transform=(get_valid_transform(image_size, pretrained)),  # only difference
+            include_metadata=include_metadata,
+            exclude={-1},
+        )
+        total_train = ConcatDataset([train_20, train_21])
+        total_val = ConcatDataset([val_20, val_21])
+        total_train.target = np.array([list(train_20.target) + list(train_21.target)]).squeeze()
+        total_val.target = np.array([list(train_20.target) + list(train_21.target)]).squeeze()
+
+        # get the indices for the train and val datasets where val is max(10% total samples, 3)
+        train_indices = []
+        val_indices = []
+        for cls in np.unique(val_20.target):
+            cls_count = sum(total_train.target == cls)
+            # cls_count = sum(train_21.target == cls)  # take 10% from DF21, not 10% total
+            n_val_samples = max(int(0.1 * cls_count), 3)
+            all_indices = np.where(total_train.target == cls)[0]
+            val_indices.extend(all_indices[-n_val_samples:])
+            train_indices.extend(all_indices[:-n_val_samples])
+
+        # # data integrity checks
+        # # assert no overlap
+        # assert len(train_indices) + len(val_indices) == len(total_train)
+        # # assert val has at least 3 samples per class
+        # val_counts = Counter(total_train.target[val_indices].tolist())
+        # assert all([v >= 3 for v in val_counts.values()])
+        # # assert train is 90% of each class except for classes for which val has 3 samples
+        # train_counts = Counter(total_train.target[train_indices].tolist())
+        # for k, v in train_counts.items():
+        #     if val_counts[k] == 3:
+        #         assert train_counts[k] > 3
+        #         continue
+        #     assert v >= 0.9 * (val_counts[k] + v)
+
+        train_dataset = Subset(total_train, indices=train_indices)
+        train_dataset.target = total_train.target[train_indices]
+        val_dataset = Subset(total_val, indices=val_indices)
+        val_dataset.target = total_val.target[val_indices]
+        return train_dataset, val_dataset, train_20.classes
+
     dataset = CustomImageDataset(
         label_file_path=METADATA_DIR / "FungiCLEF2023_train_metadata_PRODUCTION.csv",
         img_dir=DATA_DIR / "DF20",
-        transform=((get_train_transform(image_size, pretrained)) if training_augs else
+        transform=((get_train_transform(cfg, image_size, pretrained)) if training_augs else
                    (get_valid_transform(image_size, pretrained))),  # this is the difference
         include_metadata=include_metadata,
     )
@@ -344,7 +420,7 @@ def get_data_loaders(train_dataset, val_dataset, batch_size, num_workers, balanc
     return train_loader, valid_loader
 
 
-def get_openset_datasets(pretrained, image_size, n_train=2000, n_val=200, seed=42, training_augs=True,
+def get_openset_datasets(cfg, pretrained, image_size, n_train=2000, n_val=200, seed=42, training_augs=True,
                          include_metadata=False):
     """
     Function to prepare the Datasets.
@@ -359,7 +435,7 @@ def get_openset_datasets(pretrained, image_size, n_train=2000, n_val=200, seed=4
         label_file_path=METADATA_DIR / "FungiCLEF2023_val_metadata_PRODUCTION.csv",
         img_dir=DATA_DIR / "DF21",
         keep_only={-1},
-        transform=((get_train_transform(image_size, pretrained)) if training_augs else
+        transform=((get_train_transform(cfg, image_size, pretrained)) if training_augs else
                    (get_valid_transform(image_size, pretrained))),  # this is the difference
         include_metadata=include_metadata
     )
