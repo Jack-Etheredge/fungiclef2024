@@ -52,18 +52,7 @@ def choose_best_discriminator(cfg: DictConfig, project_name=None) -> Path:
 
     batch_size = cfg["open-set-recognition"]["batch_size"]
     n_workers = cfg["open-set-recognition"]["n_workers"]
-    openset_embeddings_name = cfg["open-set-recognition"]["openset_embeddings_name"]
-    closedset_embeddings_name = cfg["open-set-recognition"]["closedset_embeddings_name"]
-    openset_n_train = cfg["open-set-recognition"]["openset_n_train"]
-    openset_n_val = cfg["open-set-recognition"]["openset_n_val"]
     pretrained = cfg["open-set-recognition"]["pretrained"]
-
-    # for closed set dataset
-    undersample = cfg["train"]["undersample"]
-    oversample = cfg["train"]["oversample"]
-    equal_undersampled_val = cfg["train"]["equal_undersampled_val"]
-    oversample_prop = cfg["train"]["oversample_prop"]
-    validation_frac = cfg["train"]["validation_frac"]
 
     # for data loaders
     worker_timeout_s = cfg["train"]["worker_timeout_s"]
@@ -86,7 +75,6 @@ def choose_best_discriminator(cfg: DictConfig, project_name=None) -> Path:
 
     print("constructing embedder (closed set classifier outputting from penultimate layer)")
     model = load_model_for_inference(device, experiment_dir, model_id, n_classes)
-    # feature_extractor = create_feature_extractor_from_model(model, embedder_layer_offset)
 
     # transforms = v2.Compose([
     #     v2.Resize((image_size, image_size), interpolation=InterpolationMode.BILINEAR, antialias=True),

@@ -140,11 +140,8 @@ def train_model(cfg: DictConfig) -> None:
     use_poison_loss = cfg["train"]["use_poison_loss"]
     use_logitnorm = cfg["train"]["use_logitnorm"]
     max_norm = cfg["train"]["max_norm"]
-    undersample = cfg["train"]["undersample"]
-    oversample = cfg["train"]["oversample"]
     dropout_rate = cfg["train"]["dropout_rate"]
     weight_decay = cfg["train"]["weight_decay"]
-    balanced_sampler = cfg["train"]["balanced_sampler"]
     use_lr_finder = cfg["train"]["use_lr_finder"]
     fine_tune_after_n_epochs = cfg["train"]["fine_tune_after_n_epochs"]
     lr_scheduler = cfg["train"]["lr_scheduler"]
@@ -160,9 +157,6 @@ def train_model(cfg: DictConfig) -> None:
     if experiment_id is None:
         experiment_id = str(datetime.now()).replace(" ", "-")
         cfg["train"]["experiment_id"] = experiment_id
-
-    if balanced_sampler and (oversample or undersample):
-        raise ValueError("cannot use balanced sampler with oversample or undersample")
 
     # use experiment_id to save model checkpoint, graphs, predictions, performance metrics, etc
     experiment_dir = CHECKPOINT_DIR / experiment_id

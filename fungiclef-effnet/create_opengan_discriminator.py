@@ -13,7 +13,6 @@ from create_embeddings_openset_recognition import create_embeddings
 from openset_recognition_models import LayerNormDiscriminator as Discriminator
 from paths import CHECKPOINT_DIR
 from train_opengan import train_openganfea
-from train_opengan_from_cached_embeddings import train_openganfea as train_from_cache
 
 
 class CompositeOpenGANInferenceModel(nn.Module):
@@ -85,7 +84,7 @@ def load_opengan_discriminator(device, experiment_dir, hidden_dim, nc):
 
 def train_and_select_discriminator(cfg: DictConfig) -> None:
     create_embeddings(cfg)
-    discriminators_dir_name = train_from_cache(cfg)
+    discriminators_dir_name = train_openganfea(cfg)
     choose_best_discriminator(cfg, project_name=discriminators_dir_name)
 
 

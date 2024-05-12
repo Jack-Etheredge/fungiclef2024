@@ -23,24 +23,14 @@ def create_embeddings(cfg: DictConfig) -> None:
     use_metadata = cfg["evaluate"]["use_metadata"]
 
     # embedder setup
-    embedder_layer_offset = cfg["open-set-recognition"]["embedder_layer_offset"]
     batch_size = cfg["open-set-recognition"]["batch_size"]
     n_workers = cfg["open-set-recognition"]["n_workers"]
     openset_embeddings_name = cfg["open-set-recognition"]["openset_embeddings_name"]
     closedset_embeddings_name = cfg["open-set-recognition"]["closedset_embeddings_name"]
-    openset_n_train = cfg["open-set-recognition"]["openset_n_train"]
-    openset_n_val = cfg["open-set-recognition"]["openset_n_val"]
     closedset_n_train = cfg["open-set-recognition"]["closedset_n_train"]
     pretrained = cfg["open-set-recognition"]["pretrained"]
     openset_oversample_rate = cfg["open-set-recognition"]["openset_oversample_rate"]
     closedset_oversample_rate = cfg["open-set-recognition"]["closedset_oversample_rate"]
-
-    # for closed set dataset
-    undersample = cfg["train"]["undersample"]
-    oversample = cfg["train"]["oversample"]
-    equal_undersampled_val = cfg["train"]["equal_undersampled_val"]
-    oversample_prop = cfg["train"]["oversample_prop"]
-    validation_frac = cfg["train"]["validation_frac"]
 
     # for data loaders
     worker_timeout_s = cfg["train"]["worker_timeout_s"]
@@ -57,7 +47,6 @@ def create_embeddings(cfg: DictConfig) -> None:
     print("constructing embedder (closed set classifier outputting from penultimate layer)")
     experiment_dir = CHECKPOINT_DIR / embedder_experiment_id
     model = load_model_for_inference(device, experiment_dir, model_id, n_classes)
-    # feature_extractor = torch.nn.Sequential(*list(model.children())[:embedder_layer_offset])
 
     training_augs = True
     if closedset_oversample_rate < 1 or openset_oversample_rate < 1:
@@ -82,6 +71,8 @@ def create_embeddings(cfg: DictConfig) -> None:
     closedset_loader = torch.utils.data.DataLoader(closedset_dataset, batch_size=batch_size,
                                                    shuffle=False, num_workers=n_workers, collate_fn=collate_fn,
                                                    timeout=worker_timeout_s)
+
+    openset_n_train = len(openset_dataset_train)
 
     embeddings = []
     print("creating embeddings for open set")

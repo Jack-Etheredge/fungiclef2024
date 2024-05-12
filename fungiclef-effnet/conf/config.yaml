@@ -44,19 +44,16 @@ progressive-learning:
   end_batch_size: 32
   progression_epochs: 100
 open-set-recognition:
-  embedder_layer_offset: -1
   dlr: 1e-4
   glr: 1e-4  # normally should be higher since we update discriminator multiple times relative to generator
   seed: 999
   batch_size: 128
-  n_workers: 16
+  n_workers: 12
   epochs: 100
   openset_embeddings_name: "openset_embeddings_${evaluate.experiment_id}.h5"
   closedset_embeddings_name: "closedset_embeddings_${evaluate.experiment_id}.h5"
   pretrained: True
-  openset_n_train: 2000
   openset_oversample_rate: 1
-  openset_n_val: 200
   closedset_n_train: 50000
   closedset_oversample_rate: 1
   noise_vector_size: 100
