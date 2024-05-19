@@ -19,27 +19,13 @@ from closedset_model import build_model
 from competition_metrics import evaluate
 from create_opengan_discriminator import train_and_select_discriminator, create_composite_model
 from datasets import get_valid_transform, encode_metadata_row
-from paths import METADATA_DIR, VAL_DATA_DIR
+from paths import METADATA_DIR, DATA_DIR
 from temperature_scaling import ModelWithTemperature
 from temp_scale_model import create_temperature_scaled_model
 from utils import copy_config
 
 np.set_printoptions(precision=5)
 ImageFile.LOAD_TRUNCATED_IMAGES = True
-
-
-def get_threshold(max_prob_list, k):
-    # Calculate Q1 and Q3 quartiles
-    q1 = np.quantile(max_prob_list, 0.25)
-    q3 = np.quantile(max_prob_list, 0.75)
-
-    # Get the Interquartile Range (IQR)
-    iqr = q3 - q1
-
-    # Calculate Minimum threshold
-    min_th = q1 - k * iqr
-
-    return min_th
 
 
 class PytorchWorker:
@@ -100,6 +86,7 @@ class PytorchWorker:
         return logits.tolist()
 
 
+@torch.no_grad
 def make_submission(test_metadata, model_path, output_csv_path, images_root_path, temp_scaling,
                     opengan, cfg):
     """Make submission file"""
@@ -113,59 +100,76 @@ def make_submission(test_metadata, model_path, output_csv_path, images_root_path
 
     # Consolidate the model building logic
     if opengan:
-        model = create_composite_model(cfg).to(device)
+        model = create_composite_model(cfg, probas=True).to(device)
     else:
         model = PytorchWorker(model_path, temp_scaling=temp_scaling, model_id=model_id, device=device)
 
     # this allows use on both validation and test
     test_metadata.rename(columns={"observationID": "observation_id"}, inplace=True)
-    test_metadata = test_metadata.drop_duplicates("observation_id", keep="first")
 
+    probas_total = []
+    opengan_probas_total = []
+    for i, row in tqdm(test_metadata.iterrows(), total=len(test_metadata)):
+        image_path = row["image_path"]
+        image_path = os.path.join(images_root_path, image_path)
+        test_image = Image.open(image_path).convert("RGB")
+        if opengan:
+            if cfg["evaluate"]["use_metadata"]:
+                encoded_metadata_row = torch.tensor(np.array(encode_metadata_row(row)),
+                                                    dtype=torch.float32).unsqueeze(0).to(device)
+                transformed_image = TRANSFORMS(test_image).unsqueeze(0).to(device)
+                logits, opengan_proba = model(transformed_image, encoded_metadata_row)
+            else:
+                logits, opengan_proba = model(TRANSFORMS(test_image).unsqueeze(0).to(device))
+            # TODO: .item() solution is brittle and won't work once multiple images are fed in a batch
+            probas = softmax(logits.item())
+            probas_total.append(probas)
+            opengan_probas_total.append(opengan_proba.item())
+        else:
+            if cfg["evaluate"]["use_metadata"]:
+                encoded_metadata_row = torch.tensor(np.array(encode_metadata_row(row)), dtype=torch.float32)
+                logits = model.predict_image(test_image, encoded_metadata_row)
+            else:
+                logits = model.predict_image(test_image)
+            probas = softmax(logits)
+            probas_total.append(probas)
+            opengan_probas_total.append(probas)
+    probas_total = np.array(probas_total)
+    opengan_probas_total = np.array(opengan_probas_total)
+
+    # update predictions and scores based on average of model probas
     predictions = []
     max_probas = []
     entropy_scores = []
+    avg_opengan_probas = []
+    # pandas unique preserves order
+    unique_observations = test_metadata["observation_id"].unique()
+    for obs_id in unique_observations:
+        indices = (test_metadata["observation_id"].values == obs_id).nonzero()[0]
 
-    with torch.no_grad():
-        for i, row in tqdm(test_metadata.iterrows(), total=len(test_metadata)):
-            image_path = row["image_path"]
-            try:
-                image_path = os.path.join(images_root_path, image_path)
-                test_image = Image.open(image_path).convert("RGB")
-                if opengan:
-                    if cfg["evaluate"]["use_metadata"]:
-                        encoded_metadata_row = torch.tensor(np.array(encode_metadata_row(row)),
-                                                            dtype=torch.float32).unsqueeze(0).to(device)
-                        transformed_image = TRANSFORMS(test_image).unsqueeze(0).to(device)
-                        pred, proba = model(transformed_image, encoded_metadata_row)
-                    else:
-                        pred, proba = model(TRANSFORMS(test_image).unsqueeze(0).to(device))
-                    # TODO: .item() solution is brittle and won't work once multiple images are fed in a batch
-                    predictions.append(pred.item())
-                    max_probas.append(proba.item())
-                else:
-                    if cfg["evaluate"]["use_metadata"]:
-                        encoded_metadata_row = torch.tensor(np.array(encode_metadata_row(row)), dtype=torch.float32)
-                        logits = model.predict_image(test_image, encoded_metadata_row)
-                    else:
-                        logits = model.predict_image(test_image)
-                    probas = softmax(logits)
-                    entropy_score = entropy(probas.squeeze())
-                    predictions.append(np.argmax(probas))
-                    max_probas.append(np.max(probas))
-                    entropy_scores.append(entropy_score)
-            except Exception as e:
-                print(f"issue with image {image_path}: {e}")
-                predictions.append(-1)
-                max_probas.append(-1)
+        obs_probas = probas_total[indices]  # should still work for single index
+        avg_obs_probas = np.mean(obs_probas, axis=0)
+        entropy_score = entropy(avg_obs_probas.squeeze())
+        entropy_scores.extend([entropy_score] * len(indices))
+        max_proba = np.max(avg_obs_probas)
+        max_probas.extend([max_proba] * len(indices))
+
+        obs_opengan_probas = opengan_probas_total[indices]
+        obs_opengan_avg = np.mean(obs_opengan_probas, axis=0)
+        avg_opengan_probas.extend([obs_opengan_avg] * len(indices))
+
+        pred = np.argmax(avg_obs_probas, axis=-1).item()
+        predictions.extend([pred] * len(indices))
 
     test_metadata.loc[:, "class_id"] = predictions
     if opengan:
-        test_metadata.loc[:, "max_proba"] = max_probas
+        test_metadata.loc[:, "max_proba"] = avg_opengan_probas
         keep_cols = ["observation_id", "class_id", "max_proba"]
     else:
         test_metadata.loc[:, "max_proba"] = max_probas
         test_metadata.loc[:, "entropy"] = entropy_scores
         keep_cols = ["observation_id", "class_id", "max_proba", "entropy"]
+    test_metadata.sort_index(inplace=True)  # revert sorting in case it matters
     test_metadata[keep_cols].to_csv(output_csv_path, index=None)
 
 
@@ -181,23 +185,18 @@ def evaluate_experiment(cfg, experiment_id, temperature_scaling=False, opengan=F
     predictions_with_unknown_output_csv_path = str(
         experiment_dir / f"submission_with_unknowns_fine_tuned_thresholding{ext}.csv")
 
-    metadata_file_path = METADATA_DIR / "FungiCLEF2023_val_metadata_PRODUCTION.csv"
+    data_split = cfg['evaluate']['data_split']
+    metadata_file_path = METADATA_DIR / f"{data_split}_split_openclosed_val.csv"
     test_metadata = pd.read_csv(metadata_file_path)
-
-    # TODO: set thresholds on val
-    # TODO: evaluate on test - if the test set dataloader doesn't shuffle, should be able to use it for submission.csv
-    # TODO: remove train and val unknown examples from the ground truth for submission.csv before running evaluation
-    open_set_val_loader = None
-    closed_set_val_loader = None
-    open_set_test_loader = None
-    closed_set_test_loader = None
+    test_metadata.rename(columns={"observationID": "observation_id"}, inplace=True)
+    test_metadata = test_metadata.sort_values("observation_id")
 
     # Make predictions if they need to be made. Skip if already computed.
     if not from_outputs:
         make_submission(
             test_metadata=test_metadata,
             model_path=model_path,
-            images_root_path=VAL_DATA_DIR,
+            images_root_path=DATA_DIR,
             output_csv_path=predictions_output_csv_path,
             temp_scaling=temperature_scaling,
             opengan=opengan,
@@ -210,8 +209,6 @@ def evaluate_experiment(cfg, experiment_id, temperature_scaling=False, opengan=F
         scores_output_path = str(experiment_dir / "competition_metrics_scores_opengan.json")
         best_threshold_path = str(experiment_dir / "best_threshold_opengan.txt")
         # Generate metrics from predictions
-        test_metadata.rename(columns={"observationID": "observation_id"}, inplace=True)
-        test_metadata.drop_duplicates("observation_id", keep="first", inplace=True)
         y_true = test_metadata["class_id"].values
         submission_df = pd.read_csv(predictions_output_csv_path)
         submission_df.drop_duplicates("observation_id", keep="first", inplace=True)
@@ -242,8 +239,6 @@ def evaluate_experiment(cfg, experiment_id, temperature_scaling=False, opengan=F
             best_threshold_path = str(experiment_dir / f"best_threshold{ext}.txt")
 
             # Generate metrics from predictions
-            test_metadata.rename(columns={"observationID": "observation_id"}, inplace=True)
-            test_metadata.drop_duplicates("observation_id", keep="first", inplace=True)
             y_true = test_metadata["class_id"].values
             submission_df = pd.read_csv(predictions_output_csv_path)
             submission_df.drop_duplicates("observation_id", keep="first", inplace=True)
@@ -383,7 +378,7 @@ if __name__ == "__main__":
 
     TRANSFORMS = get_valid_transform(image_size=image_size, pretrained=True)
 
-    copy_config("evaluate", experiment_id)
+    copy_config("multiinstance_evaluate", experiment_id)
 
     outputs_precomputed = False
 

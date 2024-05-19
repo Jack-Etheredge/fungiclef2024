@@ -88,7 +88,8 @@ def choose_best_discriminator(cfg: DictConfig, project_name=None) -> Path:
                                                             shuffle=False, num_workers=4, collate_fn=collate_fn,
                                                             timeout=worker_timeout_s)
     _, closedset_dataset_val = get_datasets(cfg, pretrained=pretrained, image_size=image_size,
-                                            stage="train", dataset="closed", include_metadata=use_metadata)
+                                            stage=cfg["evaluate"]["data_split"], dataset="closed",
+                                            include_metadata=use_metadata)
     closed_set_selection_loader = torch.utils.data.DataLoader(closedset_dataset_val, batch_size=batch_size,
                                                               shuffle=False, num_workers=4,
                                                               collate_fn=collate_fn,

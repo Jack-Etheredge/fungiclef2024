@@ -1,12 +1,12 @@
 # reference: https://hydra.cc/docs/tutorials/basic/your_first_app/using_config/
 train:
-  experiment_id: "2024-05-13-caformer_s18-new-data"
+  experiment_id: "2024-05-13-caformer_s18-new-data-split"
   model_id: "caformer_s18.sail_in22k_ft_in1k_384"
   stage: "train"  # options: train, train_b, train_c, val_fine_tune, fixres_fine_tune
   use_metadata: False  # check me
   epochs: 200
   lr: 1e-3  # found with lr finder, stepping down by 1/10 after loader failure
-  lr_after_unfreeze: 5e-7  # stepping down LR
+  lr_after_unfreeze: 5e-5  # stepping down LR
   use_lr_finder: False  # incompatible with multi-input or multi-output models without modification
   pretrained: True
   early_stop_thresh: 10
@@ -66,6 +66,7 @@ evaluate:
   use_metadata: False
   image_size: 576
   batch_size: 64
+  data_split: "train"  # options: train, train_b, train_c
 
   #  experiment_id: "2024-04-21 16:36:56.707436"  # "2024-04-28 23:56:00.910245" (metaformer)  # "2024-04-26 13:31:54.470604" (efficientnetv2_s)
   #  model_id: "MetaFG_meta_0"  # "MetaFG_meta_2"  # "tf_efficientnetv2_s.in21k"

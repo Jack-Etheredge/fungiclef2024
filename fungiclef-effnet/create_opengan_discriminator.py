@@ -24,11 +24,12 @@ class CompositeOpenGANInferenceModel(nn.Module):
             NOT the softmax (or log softmax)!
     """
 
-    def __init__(self, model, opengan_discriminator, openset_label):
+    def __init__(self, model, opengan_discriminator, openset_label, probas):
         super().__init__()
         self.model = model
         self.opengan_discriminator = opengan_discriminator
         self.openset_label = openset_label
+        self.probas = probas
 
     def forward(self, image, metadata_row=None):
         if metadata_row is not None:
@@ -39,17 +40,23 @@ class CompositeOpenGANInferenceModel(nn.Module):
         final_features = self.model.forward_head(intermediate_features, pre_logits=True)
         model_probas = self.model.forward_head(intermediate_features, pre_logits=False)
 
+        opengan_probas = self.opengan_discriminator(final_features)
+
+        if self.probas:
+            # return logits instead of preds
+            if model_probas.dim() == 1:
+                model_probas = model_probas.unsqueeze(0)
+
+            return model_probas, opengan_probas
+
         model_preds = torch.argmax(model_probas, dim=1)
         if model_preds.dim() == 1:
             model_preds = model_preds.unsqueeze(0)
 
-        # opengan_preds = (self.opengan_discriminator(penultimate_layer_output) > 0.5).int()
-        # model_preds[opengan_preds == self.openset_label] = -1
-        opengan_probas = self.opengan_discriminator(final_features)
         return model_preds, opengan_probas
 
 
-def create_composite_model(cfg: DictConfig) -> nn.Module:
+def create_composite_model(cfg: DictConfig, probas=False) -> nn.Module:
     experiment_id = cfg["evaluate"]["experiment_id"]
     experiment_dir = CHECKPOINT_DIR / experiment_id
     hidden_dim = cfg["open-set-recognition"]["hidden_dim_d"]
@@ -66,7 +73,7 @@ def create_composite_model(cfg: DictConfig) -> nn.Module:
 
     model = load_model_for_inference(device, experiment_dir, model_id, n_classes).eval()
     opengan_model = load_opengan_discriminator(device, experiment_dir, hidden_dim, nc).eval()
-    composite_model = CompositeOpenGANInferenceModel(model, opengan_model, openset_label)
+    composite_model = CompositeOpenGANInferenceModel(model, opengan_model, openset_label, probas)
     # torch.save(composite_model, "opengan_composite_model.pth")
     return composite_model
 

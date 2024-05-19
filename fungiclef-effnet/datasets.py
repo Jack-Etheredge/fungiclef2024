@@ -345,7 +345,7 @@ def get_openset_datasets(cfg, pretrained, image_size, training_augs=True, includ
     Returns the training, validation, and test sets for the openset dataset.
     """
 
-    train_dataset, val_dataset = get_datasets(cfg, pretrained, image_size, stage="train",
+    train_dataset, val_dataset = get_datasets(cfg, pretrained, image_size, stage=cfg["evaluate"]["data_split"],
                                               dataset="open", include_metadata=include_metadata,
                                               training_augs=training_augs)
 

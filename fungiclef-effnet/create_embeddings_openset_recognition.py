@@ -69,7 +69,7 @@ def create_embeddings(cfg: DictConfig) -> None:
                                                  shuffle=False, num_workers=n_workers, collate_fn=collate_fn,
                                                  timeout=worker_timeout_s)
     closedset_dataset, _ = get_datasets(cfg, pretrained=pretrained, image_size=image_size,
-                                        stage="train", dataset="closed",
+                                        stage=cfg["evaluate"]["data_split"], dataset="closed",
                                         include_metadata=use_metadata, training_augs=training_augs)
     if closedset_n_train is not None:
         closedset_dataset = Subset(closedset_dataset,

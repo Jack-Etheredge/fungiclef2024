@@ -185,6 +185,9 @@ def train_model(cfg: DictConfig) -> None:
         # https://pytorch.org/tutorials/beginner/saving_loading_models.html
         checkpoint = torch.load(resume_from_checkpoint)
         best_validation_loss = checkpoint['validation_loss']
+        # if cfg["train"]["include_unknowns"]:
+        #     print("WARNING. IGNORING BEST VALIDATION LOSS BECAUSE FINE TUNING WITH UNKNOWNS. BE CAREFUL.")
+        #     best_validation_loss = float("inf")
         best_epoch = checkpoint['epoch']
         # Start epoch counter from the checkpoint epoch and set the validation loss so that the model checkpoint isn't
         #   automatically updated on the first epoch after resuming training.

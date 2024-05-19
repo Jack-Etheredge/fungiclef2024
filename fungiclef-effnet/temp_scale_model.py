@@ -27,7 +27,9 @@ def create_temperature_scaled_model(cfg: DictConfig) -> None:
     temp_scaled_model_filename = experiment_dir / "model_with_temperature.pth"
 
     # Load the training and validation datasets.
-    dataset_train, dataset_valid = get_datasets(cfg, pretrained, image_resize, stage="train", dataset="closed",
+    dataset_train, dataset_valid = get_datasets(cfg, pretrained, image_resize,
+                                                stage=cfg["evaluate"]["data_split"],
+                                                dataset="closed",
                                                 include_metadata=use_metadata)
     _, valid_loader = get_data_loaders(dataset_train, dataset_valid, batch_size, num_dataloader_workers,
                                        balanced_sampler=False)  # only applies to train loader
