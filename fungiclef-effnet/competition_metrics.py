@@ -9,10 +9,13 @@ import numpy as np
 import pandas as pd
 from sklearn.metrics import f1_score
 
+from paths import METADATA_DIR
+
 COLUMNS = ["observationID", "class_id"]
-poisonous_lvl = pd.read_csv(
-    "http://ptak.felk.cvut.cz/plants//DanishFungiDataset/poison_status_list.csv"
-)
+# poisonous_lvl = pd.read_csv(
+#     "http://ptak.felk.cvut.cz/plants//DanishFungiDataset/poison_status_list.csv"
+# )
+poisonous_lvl = pd.read_csv(METADATA_DIR / "poison_status_list.csv")
 POISONOUS_SPECIES = poisonous_lvl[poisonous_lvl["poisonous"] == 1].class_id.unique()
 
 

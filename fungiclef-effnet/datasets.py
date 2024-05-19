@@ -69,6 +69,7 @@ def get_train_transform(cfg, image_size, pretrained):
     train_augs = [
         v2.Resize(resize, interpolation=InterpolationMode.BICUBIC, antialias=True),
         v2.RandomCrop(image_size),
+        v2.RandomHorizontalFlip(0.5),
     ]
 
     if cfg["train_aug"]["trivial_aug"]:
@@ -94,17 +95,24 @@ def get_train_transform(cfg, image_size, pretrained):
 
 
 # Validation transforms
-def get_valid_transform(image_size, pretrained):
+def get_valid_transform(image_size, pretrained, fivecrop=False):
     """
     validation transformations
     """
-    resize = image_size
-    valid_transform = v2.Compose([
-        v2.Resize(resize, interpolation=InterpolationMode.BICUBIC, antialias=True),
-        v2.CenterCrop(image_size),
-        v2.Compose([v2.ToImage(), v2.ToDtype(torch.float32, scale=True)]),
-        normalize_transform(pretrained)
-    ])
+    if fivecrop:
+        valid_transform = v2.Compose([
+            v2.Resize(image_size, interpolation=InterpolationMode.BICUBIC, antialias=True),
+            v2.FiveCrop(image_size),
+            v2.Compose([v2.ToImage(), v2.ToDtype(torch.float32, scale=True)]),
+            normalize_transform(pretrained)
+        ])
+    else:
+        valid_transform = v2.Compose([
+            v2.Resize(image_size, interpolation=InterpolationMode.BICUBIC, antialias=True),
+            v2.CenterCrop(image_size),
+            v2.Compose([v2.ToImage(), v2.ToDtype(torch.float32, scale=True)]),
+            normalize_transform(pretrained)
+        ])
     return valid_transform
 
 
@@ -135,13 +143,16 @@ def get_datasets(cfg, pretrained, image_size, stage="train", dataset="closed", i
     if dataset not in valid_datasets:
         raise ValueError(f"dataset option {dataset} not in valid options: open, closed, openclosed")
 
-    # this could be cleaner as a dictionary
-    if stage == "train" or stage == "fixres_fine_tune":
-        stage_id = "train"
-    elif stage == "val_fine_tune":
-        stage_id = "val_fine_tune"
-    else:
+    stage_id_mappings = {
+        "train": "train",
+        "fixres_fine_tune": "train",
+        "train_b": "train_b",
+        "train_c": "train_c",
+        "val_fine_tune": "val_fine_tune",
+    }
+    if stage not in stage_id_mappings:
         raise ValueError(f"stage {stage} not recognized for datasets")
+    stage_id = stage_id_mappings[stage]
 
     train_metadata = f"{stage_id}_split_{dataset}_train.csv"
     val_metadata = f"{stage_id}_split_{dataset}_val.csv"

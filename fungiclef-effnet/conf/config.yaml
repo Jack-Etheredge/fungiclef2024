@@ -1,34 +1,32 @@
 # reference: https://hydra.cc/docs/tutorials/basic/your_first_app/using_config/
 train:
-  experiment_id: "2024-05-11-metaformer_2"
-  model_id: "MetaFG_meta_2"
-  # "timm/caformer_s36.sail_in22k_ft_in1k_384"  # "tf_efficientnetv2_s.in21k"  # "MetaFG_meta_0"
-  use_metadata: True  # check me
+  experiment_id: "2024-05-13-caformer_s18-new-data"
+  model_id: "caformer_s18.sail_in22k_ft_in1k_384"
+  stage: "train"  # options: train, train_b, train_c, val_fine_tune, fixres_fine_tune
+  use_metadata: False  # check me
   epochs: 200
   lr: 1e-3  # found with lr finder, stepping down by 1/10 after loader failure
-  lr_after_unfreeze: 1e-5  # stepping down LR
+  lr_after_unfreeze: 5e-7  # stepping down LR
   use_lr_finder: False  # incompatible with multi-input or multi-output models without modification
   pretrained: True
   early_stop_thresh: 10
-  new_data_split: True  # CHECK ME
   loss_function: "seesaw"
   use_poison_loss: True  # CHECK ME
   use_logitnorm: True  # CHECK ME
-  include_unknowns: False  # CHECK ME
-  batch_size: 12  # 32 for metaformer_0  # 128@224, 64@300 for tf_efficientnetv2_s.in21k
+  include_unknowns: True  # CHECK ME
+  batch_size: 40  # 32 for metaformer_0  # 128@224, 64@300 for tf_efficientnetv2_s.in21k, 40 for caformer_s18
   num_dataloader_workers: 12
   worker_timeout_s: 360
   image_resize: 384  # 224 for efficientnet_b0, 128-300+ efficientnet_v2s; 336 for eva-02
   max_norm: 1.0
   dropout_rate: 0.2  # 0.2 for both metaformer_0 and efficientnetv2_s
-  weight_decay: 0.05 # 1e-2 for efficientnetv2_s  # 0.05 for metaformer  # originally 1e-2 for eva-02
+  weight_decay: 0.05  # 1e-2 for efficientnetv2_s  # 0.05 for metaformer  # originally 1e-2 for eva-02
   balanced_sampler: False
   fine_tune_after_n_epochs: 4  # revert back to 5 after this run
   notes: trivial aug, double resize before randomcrop # check me
   n_classes: 1604
   lr_scheduler: "reducelronplateau"
   lr_scheduler_patience: 4
-  stage: "train"  # options: train, val_fine_tune, fixres_fine_tune
 train_aug:
   trivial_aug: True
   auto_aug: False
@@ -45,7 +43,7 @@ progressive-learning:
   progression_epochs: 100
 open-set-recognition:
   dlr: 1e-4
-  glr: 1e-4  # normally should be higher since we update discriminator multiple times relative to generator
+  glr: 2e-4  # normally should be higher since we update discriminator multiple times relative to generator
   seed: 999
   batch_size: 128
   n_workers: 12
@@ -56,23 +54,25 @@ open-set-recognition:
   openset_oversample_rate: 1
   closedset_n_train: 50000
   closedset_oversample_rate: 1
+  openset_n_train: 2000
   noise_vector_size: 100
   hidden_dim_g: 64
   hidden_dim_d: 64
   openset_label: 1
   closedset_label: 0
 evaluate:
-  experiment_id: "2024-05-05 00:15:57.933872"
-  model_id: "tf_efficientnetv2_s.in21k"  # "tf_efficientnetv2_s.in21k"  # "MetaFG_meta_0"
+  experiment_id: "2024-05-13-caformer_s18-new-data-split"
+  model_id: "caformer_s18"  # "tf_efficientnetv2_s.in21k"  # "MetaFG_meta_0"
   use_metadata: False
-  image_size: 600
+  image_size: 576
   batch_size: 64
 
   #  experiment_id: "2024-04-21 16:36:56.707436"  # "2024-04-28 23:56:00.910245" (metaformer)  # "2024-04-26 13:31:54.470604" (efficientnetv2_s)
-  #  model_id: "MetaFG_meta_0"  # "MetaFG_meta_0"  # "tf_efficientnetv2_s.in21k"
+  #  model_id: "MetaFG_meta_0"  # "MetaFG_meta_2"  # "tf_efficientnetv2_s.in21k"
   #  use_metadata: True
   #  image_size: 384
   #  batch_size: 32
 
   #  experiment_id: "2024-04-26 13:31:54.470604"  # "2024-04-28 23:56:00.910245" (metaformer)  # "2024-04-26 13:31:54.470604" (efficientnetv2_s)
   #  model_id: "tf_efficientnetv2_s.in21k"  # "MetaFG_meta_0"  # "tf_efficientnetv2_s.in21k"
+  # "timm/caformer_s36.sail_in22k_ft_in1k_384"  # "tf_efficientnetv2_s.in21k"  # "MetaFG_meta_0" # "MetaFG_meta_2"

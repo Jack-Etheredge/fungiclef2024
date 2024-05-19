@@ -9,6 +9,7 @@ import torch
 import torch.nn as nn
 from models.MetaFG import *
 from models.MetaFG_meta import *
+from collections import deque
 
 
 class GaussianNoise(nn.Module):
@@ -170,18 +171,35 @@ def get_embedding_size(model_id):
     Unfortunately some early experiments were run without timm and the state dict keys don't match.
     """
     model = build_model(model_id=model_id, pretrained=False)
+
+    # if hasattr(model, "classifier"):
+    #     if hasattr(model.classifier, "in_features"):
+    #         embedding_size = model.classifier.in_features
+    #     else:
+    #         embedding_size = model.classifier[-1].in_features
+    # elif hasattr(model, "head"):
+    #     if hasattr(model.head, "in_features"):
+    #         embedding_size = model.head.in_features
+    #     else:
+    #         embedding_size = model.head[-1].in_features
+
     if hasattr(model, "classifier"):
-        if hasattr(model.classifier, "in_features"):
-            embedding_size = model.classifier.in_features
-        else:
-            embedding_size = model.classifier[-1].in_features
+        head_pointer = model.classifier
     elif hasattr(model, "head"):
-        if hasattr(model.head, "in_features"):
-            embedding_size = model.head.in_features
-        else:
-            embedding_size = model.head[-1].in_features
+        head_pointer = model.head
     else:
-        raise ValueError("Model has neither head nor classifier attributes.")
+        raise ValueError("Model doesn't contain head or classifier and thus doesn't conform to expected API.")
+
+    layers = deque(list(head_pointer.children()))
+    # queue instead of stack because we want to traverse in order to get the first in_features
+    while layers:
+        layer = layers.popleft()
+        if hasattr(layer, "in_features"):
+            embedding_size = layer.in_features
+            break
+        if layer.children():
+            layers.extend(layer.children())
+
     return embedding_size
 
 

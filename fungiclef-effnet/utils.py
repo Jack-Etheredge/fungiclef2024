@@ -218,3 +218,14 @@ def get_model_preds(image, model, device):
         image = image.to(device)
         outputs = model(image)
     return outputs
+
+
+def get_device():
+    if torch.backends.mps.is_available():
+        device = torch.device("mps")
+    elif torch.cuda.is_available():
+        device = torch.device("cuda:0")
+    else:
+        device = torch.device("cpu")
+    print(f"Using device: {device}")
+    return device

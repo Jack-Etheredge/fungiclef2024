@@ -28,6 +28,7 @@ def create_embeddings(cfg: DictConfig) -> None:
     openset_embeddings_name = cfg["open-set-recognition"]["openset_embeddings_name"]
     closedset_embeddings_name = cfg["open-set-recognition"]["closedset_embeddings_name"]
     closedset_n_train = cfg["open-set-recognition"]["closedset_n_train"]
+    openset_n_train = cfg["open-set-recognition"]["openset_n_train"]
     pretrained = cfg["open-set-recognition"]["pretrained"]
     openset_oversample_rate = cfg["open-set-recognition"]["openset_oversample_rate"]
     closedset_oversample_rate = cfg["open-set-recognition"]["closedset_oversample_rate"]
@@ -51,11 +52,19 @@ def create_embeddings(cfg: DictConfig) -> None:
     training_augs = True
     if closedset_oversample_rate < 1 or openset_oversample_rate < 1:
         raise ValueError("Oversample rates must be integers >= 1 (with 1 being no oversampling).")
+    # note: with a large enough open-set dataset, training augmentations help even without oversampling, but
+    #  best is a small open-set dataset with no training augmentations and no oversampling.
     if closedset_oversample_rate == 1 and openset_oversample_rate == 1:
         training_augs = False
         print("no oversampling of either closed set or open set data, so disabling training data augmentations.")
     openset_dataset_train, _ = get_openset_datasets(cfg, pretrained=pretrained, image_size=image_size,
                                                     include_metadata=use_metadata, training_augs=training_augs)
+    if openset_n_train is not None:
+        openset_dataset_train = Subset(openset_dataset_train,
+                                       np.random.choice(openset_dataset_train.target.shape[0], openset_n_train,
+                                                        replace=False))
+    else:
+        print(f"using all closed set training data: {len(openset_n_train)} observations")
     openset_loader = torch.utils.data.DataLoader(openset_dataset_train, batch_size=batch_size,
                                                  shuffle=False, num_workers=n_workers, collate_fn=collate_fn,
                                                  timeout=worker_timeout_s)

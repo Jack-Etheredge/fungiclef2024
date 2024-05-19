@@ -147,7 +147,7 @@ def choose_best_discriminator(cfg: DictConfig, project_name=None) -> Path:
                 best_f1 = f1_macro
                 best_discriminator_path = discriminator_path
                 best_discriminator_model = discriminator_model
-                print(f"new best discriminator: {best_discriminator_path} with selection roc-auc {f1_macro}")
+                print(f"new best discriminator: {best_discriminator_path} with selection f1 {f1_macro}")
     # print(f"best discriminator: {best_discriminator_path} with selection roc-auc {best_rocauc}")
     print(f"best discriminator: {best_discriminator_path} with selection macro f1 {best_f1} and roc-auc {rocauc}")
 
